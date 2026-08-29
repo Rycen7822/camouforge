@@ -43,6 +43,36 @@ _TITLEBAR_SVG_CSS = """
 }
 """
 
+_TAB_CLICK_MARKER = "CAMOUFORGE_TAB_CLICK"
+_TAB_CLICK_CSS = """
+/* CamouForge patch: restore normal single-click tab selection.
+ * The bundled theme makes #TabsToolbar draggable and lets tabs inherit that
+ * state while disabling their content's pointer events. Keep only the empty
+ * toolbar area draggable. Marker: CAMOUFORGE_TAB_CLICK. */
+#TabsToolbar .tabbrowser-tab,
+#TabsToolbar .tab-content {
+  -moz-window-dragging: no-drag !important;
+}
+#TabsToolbar .tab-content {
+  pointer-events: auto !important;
+}
+"""
+
+_TAB_LAYOUT_MARKER = "CAMOUFORGE_TAB_LAYOUT"
+_TAB_LAYOUT_CSS = """
+/* Keep regular tabs bounded so the trailing toolbar remains draggable.
+ * Marker: CAMOUFORGE_TAB_LAYOUT. */
+#TabsToolbar .tabbrowser-tab[fadein]:not([pinned]) {
+  max-width: 240px !important;
+}
+"""
+
+_CHROME_CSS_PATCHES = (
+    (_TITLEBAR_SVG_MARKER, _TITLEBAR_SVG_CSS),
+    (_TAB_CLICK_MARKER, _TAB_CLICK_CSS),
+    (_TAB_LAYOUT_MARKER, _TAB_LAYOUT_CSS),
+)
+
 
 def _font_has_cbdt_emoji(path: Path) -> bool:
     try:
@@ -372,29 +402,26 @@ def _shortcut_extension_dir(profile: Dict[str, Any]) -> Optional[str]:
     return str(ext_dir)
 
 
-def _ensure_titlebar_svg_patch(executable_path: Optional[str]) -> None:
-    """浏览器目录 chrome.css 缺窗口按钮 SVG 补丁时幂等追加。
-
-    camoufox 的 xul.dll 整体加载浏览器目录的 chrome.css；浏览器被重新解压后
-    手工补丁会丢，这里在每次启动前按 marker 自愈。补丁失败不影响启动，但必须
-    在日志留痕（stderr → 当日日志文件），否则窗口按钮变方框时无从排查。
-    """
+def _ensure_chrome_css_patches(executable_path: Optional[str]) -> None:
+    """幂等补齐 Camoufox 浏览器 chrome.css 修复。"""
     if not executable_path:
         return
     css = Path(executable_path).parent / "chrome.css"
     try:
         if not css.exists():
-            print(f"[camoforge] 窗口按钮补丁跳过：{css} 不存在", file=sys.stderr)
+            print(f"[camoforge] 浏览器样式补丁跳过：{css} 不存在", file=sys.stderr)
             return
         text = css.read_text(encoding="utf-8", errors="replace")
-        if _TITLEBAR_SVG_MARKER in text:
+        missing = [body for marker, body in _CHROME_CSS_PATCHES if marker not in text]
+        if not missing:
             return
-        css.write_text(text + _TITLEBAR_SVG_CSS, encoding="utf-8")
-        # 写后读回验证：写入被截断/拦截时下一次启动无法自愈（marker 已在）
-        if _TITLEBAR_SVG_MARKER not in css.read_text(encoding="utf-8", errors="replace"):
-            print(f"[camoforge] 窗口按钮补丁写入后校验失败: {css}", file=sys.stderr)
+        css.write_text(text + "".join(missing), encoding="utf-8")
+        written = css.read_text(encoding="utf-8", errors="replace")
+        failed = [marker for marker, _ in _CHROME_CSS_PATCHES if marker not in written]
+        if failed:
+            print(f"[camoforge] 浏览器样式补丁写入后校验失败: {css}: {failed}", file=sys.stderr)
     except Exception as e:
-        print(f"[camoforge] 窗口按钮补丁失败: {css}: {e}", file=sys.stderr)
+        print(f"[camoforge] 浏览器样式补丁失败: {css}: {e}", file=sys.stderr)
 
 
 _SESSION_HISTORY_MARKER = "CAMOUFORGE_SESSION_HISTORY_50"
