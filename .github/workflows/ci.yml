@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup uv（与运行时自举同版本）
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.4"
+          enable-cache: true
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Sync worker deps (frozen)
+        run: uv sync --frozen --no-dev --python 3.12
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Worker py_compile
+        run: .venv\Scripts\python.exe -m compileall -q worker
+
+      - name: Worker unit tests (browserless)
+        run: .venv\Scripts\python.exe tests/test_worker_unit.py
+
+      - name: Worker protocol smoke (no browser)
+        run: .venv\Scripts\python.exe verify_worker.py

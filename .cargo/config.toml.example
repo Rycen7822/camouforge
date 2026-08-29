@@ -1,0 +1,11 @@
+# 本机 vendor 覆盖模板：把本文件复制为 .cargo/config.toml 并改路径即可让
+# 本机构建走本地 vendor git 仓库（不碰 GitHub、不重复克隆），提交的 Cargo.toml
+# 保持上游 https 源，换机器/CI 无此文件时照常联网构建。
+# git 依赖不支持相对路径，file:// 必须是绝对路径；vendor 不在本机时不要启用。
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "file:///PATH/TO/camouforge/vendor/zed", rev = "60471510fd0127a3750c42b3aa2a6243c8a695c6" }
+gpui_platform = { git = "file:///PATH/TO/camouforge/vendor/zed", rev = "60471510fd0127a3750c42b3aa2a6243c8a695c6" }
+
+[patch."https://github.com/longbridge/gpui-component"]
+gpui-component = { git = "file:///PATH/TO/camouforge/vendor/gpui-component", rev = "208727fd29caddb46e6b4798229da0775b9ed984" }
+gpui-component-assets = { git = "file:///PATH/TO/camouforge/vendor/gpui-component", rev = "208727fd29caddb46e6b4798229da0775b9ed984" }

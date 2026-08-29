@@ -1,0 +1,51 @@
+[package]
+name = "camoforge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "camoforge"
+path = "src/main.rs"
+
+[dependencies]
+camoforge-protocol = { path = "../protocol" }
+# 上游 git 源 + rev 钉住，换机器/CI 可直接构建。本机提速走 .cargo/config.toml
+# 的 vendor 覆盖（相对路径，gitignore；模板见 .cargo/config.toml.example）。
+gpui = { git = "https://github.com/zed-industries/zed", rev = "60471510fd0127a3750c42b3aa2a6243c8a695c6" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "60471510fd0127a3750c42b3aa2a6243c8a695c6", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "208727fd29caddb46e6b4798229da0775b9ed984" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "208727fd29caddb46e6b4798229da0775b9ed984" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+sha2 = "0.10"
+# native-certs 读系统证书库而非捆绑根证书：兼容 Clash 等装进系统库的 TLS 中间人根证书
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
+# 托盘图标 / 窗口隐藏恢复：直接用 Win32（windows 0.61 与 gpui_windows 同版，共享编译产物）。
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# 与 gpui 固定的 raw-window-handle 0.6 同版，用于取主窗口 HWND（HasWindowHandle）。
+raw-window-handle = "0.6"
+
+[build-dependencies]
+embed-resource = "2"
+
+[dev-dependencies]
+tempfile = "3"
+# AppState::new → ensure_python_env 启动路径测试：gpui 测试执行器
+gpui = { git = "https://github.com/zed-industries/zed", rev = "60471510fd0127a3750c42b3aa2a6243c8a695c6", features = [
+    "test-support",
+] }
