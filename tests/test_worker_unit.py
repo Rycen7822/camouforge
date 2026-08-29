@@ -241,12 +241,12 @@ def test_default_executable_path_prefers_exact_name():
             (tmp / d / exe).write_text("")
         # 无精确名时取名称最大（最新版本目录），而非字母序最小
         got = w._default_executable_path()
-        assert got == str(tmp / "camoufox-152" / exe), got
+        assert Path(got).resolve() == (tmp / "camoufox-152" / exe).resolve(), got
         # 精确名 camoufox 优先于任何版本化目录
         (tmp / "camoufox").mkdir()
         (tmp / "camoufox" / exe).write_text("")
         got = w._default_executable_path()
-        assert got == str(tmp / "camoufox" / exe), got
+        assert Path(got).resolve() == (tmp / "camoufox" / exe).resolve(), got
 
     with tempfile.TemporaryDirectory() as tmp:
         _with_fake_tree(tmp, go)
