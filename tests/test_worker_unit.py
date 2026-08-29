@@ -11,6 +11,7 @@ import importlib.util
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 WORKER = Path(__file__).resolve().parent.parent / "worker" / "camoforge_worker.py"
 
@@ -18,6 +19,8 @@ _spec = importlib.util.spec_from_file_location("camoforge_worker", WORKER)
 w = importlib.util.module_from_spec(_spec)
 assert _spec and _spec.loader
 _spec.loader.exec_module(w)
+
+import browser_patches as browser_patches
 
 
 def make_profile(**overrides):
@@ -145,6 +148,89 @@ def test_fingerprint_strips_prefixes_and_writes_dpr():
     if dpr:
         assert cfg["window.devicePixelRatio"] == dpr
 
+
+def test_macos_font_lists_keep_apple_color_emoji():
+    explicit = w.translate_profile(
+        make_profile(launch={"os": ["macos"], "fonts": ["Helvetica Neue"]}),
+        Path("/tmp"),
+    )
+    assert explicit["fonts"] == ["Helvetica Neue", "Apple Color Emoji"]
+
+    fp = w.generate_fingerprint({"os": "macos"})["fingerprint"]
+    fp["fonts"] = ["Helvetica Neue"]
+    rebuilt = w.translate_profile(
+        make_profile(launch={"os": ["macos"], "fingerprint": fp}),
+        Path("/tmp"),
+    )
+    assert "Apple Color Emoji" in rebuilt["fonts"]
+    assert len(rebuilt["fonts"]) > 20
+
+
+def test_windows_font_list_does_not_gain_apple_color_emoji():
+    kw = w.translate_profile(
+        make_profile(launch={"os": ["windows"], "fonts": ["Arial"]}),
+        Path("/tmp"),
+    )
+    assert kw["fonts"] == ["Arial"]
+
+
+def test_emoji_font_bounds_are_recovered_without_changing_valid_values():
+    damaged = {
+        "head": SimpleNamespace(xMin=0, yMin=0, xMax=0, yMax=0),
+        "hhea": SimpleNamespace(
+            ascent=1900,
+            descent=-500,
+            advanceWidthMax=2550,
+            xMaxExtent=0,
+        ),
+    }
+    browser_patches._restore_font_bounds(damaged)
+    assert (damaged["head"].xMin, damaged["head"].yMin) == (0, -500)
+    assert (damaged["head"].xMax, damaged["head"].yMax) == (2550, 1900)
+    assert damaged["hhea"].xMaxExtent == 2550
+
+    valid = {
+        "head": SimpleNamespace(xMin=-10, yMin=-20, xMax=30, yMax=40),
+        "hhea": SimpleNamespace(
+            ascent=100,
+            descent=-40,
+            advanceWidthMax=120,
+            xMaxExtent=90,
+        ),
+    }
+    browser_patches._restore_font_bounds(valid)
+    assert (valid["head"].xMin, valid["head"].yMin) == (-10, -20)
+    assert (valid["head"].xMax, valid["head"].yMax) == (30, 40)
+    assert valid["hhea"].xMaxExtent == 90
+
+
+def test_svg_emoji_images_require_firefox_xlink():
+    document = SimpleNamespace(
+        data=(
+            '<svg xmlns="http://www.w3.org/2000/svg"><g id="glyph1">'
+            '<image href="data:image/png;base64,AAAA"/></g></svg>'
+        )
+    )
+    font = {"SVG ": SimpleNamespace(docList=[document])}
+    assert not browser_patches._svg_images_are_firefox_compatible(font)
+
+    document.data = (
+        '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
+        'xmlns:xlink="http://www.w3.org/1999/xlink"><g id="glyph1">'
+        '<image xlink:href="data:image/png;base64,AAAA"/></g></svg>'
+    )
+
+    assert browser_patches._svg_images_are_firefox_compatible(font)
+
+
+def test_emoji_repair_source_is_outside_bundled_fonts_directory():
+    browser_dir = Path("C:/camoufox")
+    source = (
+        browser_dir
+        / browser_patches._MACOS_EMOJI_REPAIR_DIR
+        / browser_patches._MACOS_EMOJI_SOURCE
+    )
+    assert source.parent != browser_dir / "fonts"
 
 
 class FakeDownload:

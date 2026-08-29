@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+MACOS_EMOJI_FAMILY = "Apple Color Emoji"
+_MACOS_EMOJI_FONT = "AppleColorEmoji.ttf"
+_MACOS_EMOJI_REPAIR_DIR = ".camouforge-font-repair"
+_MACOS_EMOJI_SOURCE = "AppleColorEmoji.camouforge-source"
 
 _TITLEBAR_SVG_MARKER = "CAMOUFORGE_TITLEBAR_SVG"
 _TITLEBAR_SVG_CSS = """
@@ -36,6 +42,198 @@ _TITLEBAR_SVG_CSS = """
   background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='12'%20height='12'%3E%3Cpath%20d='M2%202l8%208M10%202l-8%208'%20stroke='white'%20stroke-opacity='.85'/%3E%3C/svg%3E") !important;
 }
 """
+
+
+def _font_has_cbdt_emoji(path: Path) -> bool:
+    try:
+        from fontTools.ttLib import TTFont
+
+        with TTFont(path, lazy=True) as font:
+            return (
+                "CBDT" in font
+                and "CBLC" in font
+                and font["name"].getDebugName(1) == MACOS_EMOJI_FAMILY
+            )
+    except Exception:
+        return False
+
+
+def _font_has_svg_emoji(path: Path) -> bool:
+    try:
+        from fontTools.ttLib import TTFont
+
+        with TTFont(path, lazy=True) as font:
+            head = font["head"]
+            hhea = font["hhea"]
+            return (
+                "SVG " in font
+                and "glyf" in font
+                and "CBDT" not in font
+                and "CBLC" not in font
+                and font["name"].getDebugName(1) == MACOS_EMOJI_FAMILY
+                and head.xMax > head.xMin
+                and head.yMax > head.yMin
+                and hhea.xMaxExtent > 0
+                and _svg_images_are_firefox_compatible(font)
+            )
+    except Exception:
+        return False
+
+
+def _restore_font_bounds(font: Any) -> None:
+    head = font["head"]
+    hhea = font["hhea"]
+    if head.xMax <= head.xMin or head.yMax <= head.yMin:
+        head.xMin = 0
+        head.yMin = hhea.descent
+        head.xMax = hhea.advanceWidthMax
+        head.yMax = hhea.ascent
+    if hhea.xMaxExtent <= 0:
+        hhea.xMaxExtent = hhea.advanceWidthMax
+
+
+def _svg_images_are_firefox_compatible(font: Any) -> bool:
+    documents = font["SVG "].docList
+    return bool(documents) and all(
+        'xmlns:xlink="http://www.w3.org/1999/xlink"' in document.data
+        and 'xlink:href="data:image/png;base64,' in document.data
+        for document in documents
+    )
+
+
+def _convert_apple_emoji_to_svg(source: Path, destination: Path) -> None:
+    import base64
+
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    from fontTools.ttLib import TTFont, newTable
+
+    with TTFont(source, recalcBBoxes=False, recalcTimestamp=False) as font:
+        if "CBDT" not in font or "CBLC" not in font:
+            raise ValueError("缺少 CBDT/CBLC 彩色位图表")
+
+        # Firefox on Windows needs outline tables even when SVG supplies the image.
+        glyph_order = font.getGlyphOrder()
+        glyf = newTable("glyf")
+        glyf.glyphs = {name: TTGlyphPen(None).glyph() for name in glyph_order}
+        glyf.glyphOrder = glyph_order
+        font["glyf"] = glyf
+        font["loca"] = newTable("loca")
+
+        maxp = font["maxp"]
+        maxp.tableVersion = 0x00010000
+        maxp.maxZones = 1
+        for field in (
+            "maxPoints",
+            "maxContours",
+            "maxCompositePoints",
+            "maxCompositeContours",
+            "maxTwilightPoints",
+            "maxStorage",
+            "maxFunctionDefs",
+            "maxInstructionDefs",
+            "maxStackElements",
+            "maxSizeOfInstructions",
+            "maxComponentElements",
+            "maxComponentDepth",
+        ):
+            setattr(maxp, field, 0)
+
+        strike = font["CBDT"].strikeData[0]
+        ppem = font["CBLC"].strikes[0].bitmapSizeTable.ppemY
+        scale = font["head"].unitsPerEm / ppem
+        svg = newTable("SVG ")
+        svg.docList = []
+        for glyph_name in sorted(strike, key=font.getGlyphID):
+            glyph_id = font.getGlyphID(glyph_name)
+            bitmap = strike[glyph_name]
+            bitmap.ensureDecompiled()
+            metrics = bitmap.metrics
+            png = base64.b64encode(bitmap.imageData).decode("ascii")
+            # Firefox 152 renders embedded PNGs through SVG 1.1 xlink; plain
+            # SVG2 href produces transparent glyphs despite valid metrics.
+            document = (
+                '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
+                'xmlns:xlink="http://www.w3.org/1999/xlink">'
+                f'<g id="glyph{glyph_id}">'
+                f'<image x="{metrics.BearingX * scale:.3f}" '
+                f'y="{-metrics.BearingY * scale:.3f}" '
+                f'width="{metrics.width * scale:.3f}" '
+                f'height="{metrics.height * scale:.3f}" '
+                f'xlink:href="data:image/png;base64,{png}"/>'
+                "</g></svg>"
+            )
+            svg.docList.append((document, glyph_id, glyph_id, True))
+        font["SVG "] = svg
+        del font["CBDT"]
+        del font["CBLC"]
+        _restore_font_bounds(font)
+        font.save(destination, reorderTables=False)
+
+
+def _backup_emoji_source(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pending = destination.with_name(f"{destination.name}.pending")
+    pending.unlink(missing_ok=True)
+    shutil.copyfile(source, pending)
+    if not _font_has_cbdt_emoji(pending):
+        pending.unlink(missing_ok=True)
+        raise RuntimeError("原字体备份校验失败")
+    os.replace(pending, destination)
+
+
+def _ensure_macos_emoji_font(executable_path: Optional[str]) -> None:
+    """让 Windows Camoufox 可绘制捆绑的原始 Apple emoji 字形。"""
+    if os.name != "nt" or not executable_path:
+        return
+    browser_dir = Path(executable_path).parent
+    fonts_dir = browser_dir / "fonts"
+    destination = fonts_dir / _MACOS_EMOJI_FONT
+    pending = destination.with_name(f"{destination.name}.pending")
+    source = browser_dir / _MACOS_EMOJI_REPAIR_DIR / _MACOS_EMOJI_SOURCE
+    try:
+        if _font_has_svg_emoji(destination):
+            pending.unlink(missing_ok=True)
+            return
+        if not destination.exists():
+            print(f"[camoforge] Apple emoji 修复跳过：{destination} 不存在", file=sys.stderr)
+            return
+
+        if _font_has_svg_emoji(pending):
+            os.replace(pending, destination)
+            print(f"[camoforge] 已启用 Windows 兼容的 Apple Color Emoji: {destination}", file=sys.stderr)
+            return
+
+        if _font_has_cbdt_emoji(destination):
+            # Keep the source outside fonts/: Camoufox scans bundled font data
+            # regardless of extension, and a second Apple family shadows SVG.
+            _backup_emoji_source(destination, source)
+        elif not _font_has_cbdt_emoji(source):
+            raise RuntimeError("找不到可转换的 Apple Color Emoji 原字体")
+
+        pending.unlink(missing_ok=True)
+        _convert_apple_emoji_to_svg(source, pending)
+        if not _font_has_svg_emoji(pending):
+            raise RuntimeError("转换结果校验失败")
+        os.replace(pending, destination)
+        print(f"[camoforge] 已启用 Windows 兼容的 Apple Color Emoji: {destination}", file=sys.stderr)
+    except Exception as error:
+        print(
+            f"[camoforge] Apple emoji 修复暂未应用（关闭已运行的浏览器后重试）: "
+            f"{destination}: {error}",
+            file=sys.stderr,
+        )
+
+
+def _ensure_macos_emoji_whitelist() -> None:
+    """把 Apple Color Emoji 固定为 macOS 指纹的必备字体。"""
+    try:
+        import camoufox.fingerprints as fingerprints
+
+        fonts = fingerprints._ESSENTIAL_FONTS_MACOS
+        if MACOS_EMOJI_FAMILY not in fonts:
+            fonts.append(MACOS_EMOJI_FAMILY)
+    except Exception as error:
+        print(f"[camoforge] Apple emoji 字体白名单修复失败: {error}", file=sys.stderr)
 
 # `__TILES__` 占位符由 _shortcut_page 用真实条目替换；不含任何外部资源请求。
 _SHORTCUTS_PAGE_TEMPLATE = """<!doctype html>
