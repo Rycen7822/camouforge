@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="37 36 438 438"
+     role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+  <title id="title">Pixel matrix portal icon</title>
+  <desc id="desc">A graphite rounded-square application tile with an ivory open portal, a modular matrix, and a controlled orange-and-ivory pixel cascade.</desc>
+
+  <defs>
+    <!-- Graphite app tile -->
+    <linearGradient id="tileBase" x1="76" y1="56" x2="451" y2="469" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2b2c2f"/>
+      <stop offset="0.30" stop-color="#202124"/>
+      <stop offset="0.66" stop-color="#111214"/>
+      <stop offset="1" stop-color="#08090b"/>
+    </linearGradient>
+    <radialGradient id="topLight" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+                    gradientTransform="translate(210 126) rotate(49) scale(350 300)">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.080"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0.016"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.19"/>
+    </radialGradient>
+    <radialGradient id="centerWell" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+                    gradientTransform="translate(267 262) scale(235 205)">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.48"/>
+      <stop offset="0.50" stop-color="#000000" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tileEdge" x1="90" y1="48" x2="447" y2="465" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#aeb2b6" stop-opacity="0.74"/>
+      <stop offset="0.16" stop-color="#55595d" stop-opacity="0.58"/>
+      <stop offset="0.58" stop-color="#111316" stop-opacity="0.88"/>
+      <stop offset="1" stop-color="#5e6266" stop-opacity="0.42"/>
+    </linearGradient>
+
+    <!-- Satin ivory and warm signal orange -->
+    <linearGradient id="ivory" x1="136" y1="126" x2="320" y2="387" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fffefa"/>
+      <stop offset="0.38" stop-color="#f8f4ef"/>
+      <stop offset="0.72" stop-color="#ebe6e0"/>
+      <stop offset="1" stop-color="#d9d3cd"/>
+    </linearGradient>
+    <linearGradient id="ivoryTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffefa"/>
+      <stop offset="0.48" stop-color="#f4f0eb"/>
+      <stop offset="1" stop-color="#d9d4ce"/>
+    </linearGradient>
+    <linearGradient id="signalOrange" x1="0" y1="0" x2="0.78" y2="1">
+      <stop offset="0" stop-color="#ffae24"/>
+      <stop offset="0.45" stop-color="#ff8a0b"/>
+      <stop offset="1" stop-color="#ff5b00"/>
+    </linearGradient>
+    <linearGradient id="orangeStroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd66f"/>
+      <stop offset="0.30" stop-color="#ffb32c"/>
+      <stop offset="1" stop-color="#ff5e00"/>
+    </linearGradient>
+
+    <!-- Depth -->
+    <filter id="appShadow" x="-16%" y="-16%" width="132%" height="142%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="7" stdDeviation="8" flood-color="#000000" flood-opacity="0.78"/>
+    </filter>
+    <filter id="glyphShadow" x="-24%" y="-24%" width="148%" height="158%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#000000" flood-opacity="0.80"/>
+      <feDropShadow dx="0" dy="1" stdDeviation="0.7" flood-color="#a65f27" flood-opacity="0.32"/>
+    </filter>
+    <filter id="whiteModuleShadow" x="-50%" y="-50%" width="200%" height="220%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.80"/>
+      <feDropShadow dx="0" dy="0.7" stdDeviation="0.45" flood-color="#a56636" flood-opacity="0.24"/>
+    </filter>
+    <filter id="orangeModuleShadow" x="-60%" y="-60%" width="220%" height="240%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.8" flood-color="#000000" flood-opacity="0.82"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="2.1" flood-color="#ff7200" flood-opacity="0.25"/>
+    </filter>
+    <filter id="grain" x="-6%" y="-6%" width="112%" height="112%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="3" seed="21"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .085 0"/>
+    </filter>
+    <filter id="ivoryGrain" x="-8%" y="-8%" width="116%" height="116%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="1.05" numOctaves="2" seed="7"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 .55  0 0 0 0 .50  0 0 0 0 .47  0 0 0 .055 0"/>
+    </filter>
+
+    <clipPath id="tileClip">
+      <rect x="39" y="38" width="434" height="434" rx="70"/>
+    </clipPath>
+    <clipPath id="portalClip">
+      <path d="M304 136H172C142 136 121 157 121 183V336C121 362 140 382 164 382H303C310 382 315 376 315 368C315 360 309 353 301 353H181C164 353 153 340 153 322V194C153 177 164 165 178 165H300C309 165 315 156 315 146C315 140 311 136 304 136Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Outside the rounded tile remains transparent. -->
+  <g filter="url(#appShadow)">
+    <rect x="39" y="38" width="434" height="434" rx="70"
+          fill="url(#tileBase)" stroke="url(#tileEdge)" stroke-width="1.7"/>
+    <rect x="42" y="41" width="428" height="428" rx="67"
+          fill="none" stroke="#08090b" stroke-opacity="0.92" stroke-width="1.15"/>
+    <rect x="40.7" y="39.7" width="430.6" height="430.6" rx="68.4"
+          fill="none" stroke="#ffffff" stroke-opacity="0.052" stroke-width="0.85"/>
+  </g>
+
+  <g clip-path="url(#tileClip)" pointer-events="none">
+    <rect x="39" y="38" width="434" height="434" rx="70" fill="url(#topLight)"/>
+    <rect x="39" y="38" width="434" height="434" rx="70" fill="url(#centerWell)"/>
+    <rect x="39" y="38" width="434" height="434" rx="70" filter="url(#grain)" opacity="0.13"/>
+  </g>
+
+  <!-- Main open portal. -->
+  <g filter="url(#glyphShadow)">
+    <path d="M304 138H172C142 138 121 159 121 185V338C121 364 140 384 164 384H303C310 384 315 378 315 370C315 362 309 355 301 355H181C164 355 153 342 153 324V196C153 179 164 167 178 167H300C309 167 315 158 315 148C315 142 311 138 304 138Z"
+          fill="#9e6538" opacity="0.58"/>
+    <path d="M304 136H172C142 136 121 157 121 183V336C121 362 140 382 164 382H303C310 382 315 376 315 368C315 360 309 353 301 353H181C164 353 153 340 153 322V194C153 177 164 165 178 165H300C309 165 315 156 315 146C315 140 311 136 304 136Z"
+          fill="url(#ivory)" stroke="#fffdf9" stroke-width="1.0" stroke-linejoin="round"/>
+    <path d="M171.8 138.1H302.7C308.6 138.1 312.5 141.3 312.8 146.2"
+          fill="none" stroke="#ffffff" stroke-opacity="0.58" stroke-width="1.2" stroke-linecap="round"/>
+    <path d="M164.5 379.7H301.7C308.2 379.7 312.6 375.0 312.9 368.5"
+          fill="none" stroke="#c5beb8" stroke-opacity="0.76" stroke-width="1.05" stroke-linecap="round"/>
+  </g>
+  <path d="M304 136H172C142 136 121 157 121 183V336C121 362 140 382 164 382H303C310 382 315 376 315 368C315 360 309 353 301 353H181C164 353 153 340 153 322V194C153 177 164 165 178 165H300C309 165 315 156 315 146C315 140 311 136 304 136Z"
+        clip-path="url(#portalClip)" filter="url(#ivoryGrain)" opacity="0.12" pointer-events="none"/>
+
+  <!-- Modular matrix. -->
+  <g filter="url(#whiteModuleShadow)" fill="url(#ivoryTile)" stroke="#fffdfa" stroke-width="0.8">
+    <rect x="188" y="213" width="26" height="26" rx="4.2"/>
+    <rect x="224" y="213" width="26" height="26" rx="4.2"/>
+    <rect x="260" y="213" width="26" height="26" rx="4.2"/>
+    <rect x="188" y="249" width="26" height="26" rx="4.2"/>
+    <rect x="260" y="249" width="26" height="26" rx="4.2"/>
+    <rect x="188" y="285" width="26" height="26" rx="4.2"/>
+    <rect x="224" y="285" width="26" height="26" rx="4.2"/>
+    <rect x="260" y="285" width="26" height="26" rx="4.2"/>
+  </g>
+  <g filter="url(#orangeModuleShadow)">
+    <rect x="224" y="249" width="26" height="26" rx="4.5"
+          fill="url(#signalOrange)" stroke="url(#orangeStroke)" stroke-width="1.05"/>
+    <path d="M229.3 251.1H244.5" fill="none" stroke="#ffd878" stroke-opacity="0.62" stroke-width="0.95" stroke-linecap="round"/>
+  </g>
+
+  <!-- Controlled pixel cascade. -->
+  <g filter="url(#whiteModuleShadow)" fill="url(#ivoryTile)" stroke="#fffdfa">
+    <rect x="354" y="152" width="14" height="14" rx="2.8" stroke-width="0.65"/>
+    <rect x="321" y="177" width="25" height="25" rx="4.3" stroke-width="0.78"/>
+    <rect x="359" y="207" width="17" height="17" rx="3.1" stroke-width="0.70"/>
+    <rect x="393" y="243" width="8" height="8" rx="1.55" stroke-width="0.48"/>
+    <rect x="359" y="271" width="17" height="17" rx="3.1" stroke-width="0.70"/>
+    <rect x="321" y="293" width="25" height="25" rx="4.3" stroke-width="0.78"/>
+    <rect x="350" y="333" width="14" height="14" rx="2.8" stroke-width="0.65"/>
+  </g>
+  <g filter="url(#orangeModuleShadow)">
+    <rect x="383" y="185" width="8" height="8" rx="1.55"
+          fill="url(#signalOrange)" stroke="#ffd061" stroke-width="0.62"/>
+    <rect x="321" y="235" width="27" height="26" rx="5.1"
+          fill="url(#signalOrange)" stroke="url(#orangeStroke)" stroke-width="1.05"/>
+    <path d="M326.4 237.2H342.2" fill="none" stroke="#ffd878" stroke-opacity="0.60" stroke-width="0.95" stroke-linecap="round"/>
+    <rect x="383" y="306" width="8" height="8" rx="1.55"
+          fill="url(#signalOrange)" stroke="#ffd061" stroke-width="0.62"/>
+  </g>
+</svg>

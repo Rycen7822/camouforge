@@ -1,0 +1,5 @@
+# worker 运行环境自举配置：解释器与缓存全部收进应用目录，锁定依赖真源。
+python-preference = "only-managed"
+python-downloads = "automatic"
+link-mode = "copy"
+system-certs = true

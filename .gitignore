@@ -1,0 +1,51 @@
+# Rust
+/target
+
+# Python
+.venv/
+.venv.part-*/
+.venv.backup-*/
+__pycache__/
+*.py[cod]
+
+# 应用自举运行时（uv 工具 / 托管 Python / 下载缓存）与打包产物
+.camouforge-runtime/
+/dist/
+
+# 运行时数据
+profiles/
+*.corrupt
+*.tmp
+
+# 工作笔记
+.work/
+/CODEX_STATE.md
+/CODEX_*.md
+/note.md
+/notes.md
+/PLAN.md
+/TODO.md
+/plugins/
+/.agents/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# vendor 是独立 git 仓库（各自管理历史，Cargo.toml 以 rev 钉住）
+vendor/
+
+# 本机 cargo 覆盖（vendor 加速，机器相关；模板 .cargo/config.toml.example 保留）
+.cargo/config.toml
+
+# 临时脚本 / 诊断产物
+temp/
+
+# ZCode 客户端配置（同 .vscode，机器相关）
+.zcode/
+
+# 诊断截图（临时调试产物）
+*.png
+!/docs/images/*.png

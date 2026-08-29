@@ -1,0 +1,5 @@
+// CamouForge 应用图标（Windows 资源）。
+// 资源 ID 1：Explorer 用它显示 exe 图标；GPUI 的 Windows 窗口类也从
+// 模块资源 ID 1 加载图标（gpui_windows load_icon → LoadImageW(PCWSTR(1))），
+// 因此任务栏/标题栏同样显示该图标。
+1 ICON "app.ico"
