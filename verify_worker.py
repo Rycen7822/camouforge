@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 ROOT = Path(__file__).resolve().parent
 WORKER = ROOT / "worker" / "camoforge_worker.py"
 PYTHON = sys.executable
