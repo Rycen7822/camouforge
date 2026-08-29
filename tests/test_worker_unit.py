@@ -349,12 +349,24 @@ def test_chrome_css_patches_append_incrementally_and_are_idempotent():
         assert t1.count(browser_patches._TITLEBAR_SVG_MARKER) == 1
         assert browser_patches._TAB_CLICK_MARKER in t1
         assert browser_patches._TAB_LAYOUT_MARKER in t1
+        assert browser_patches._CHROME_DARK_THEME_MARKER in t1
         assert "-moz-window-dragging: no-drag" in t1
         assert "pointer-events: auto" in t1
         assert ".tabbrowser-tab[fadein]:not([pinned])" in t1
         assert "max-width: 240px" in t1
+        assert "#TabsToolbar" in t1
+        assert "background-color: #1f2020" in t1
+        assert "background-color: #3c3c3c" in t1
         browser_patches._ensure_chrome_css_patches(str(exe))
         assert css.read_text(encoding="utf-8") == t1
+
+
+def test_shortcuts_page_uses_chrome_dark_background():
+    html = browser_patches._build_shortcuts_html(
+        [{"name": "Example", "url": "https://example.com"}]
+    )
+    assert "background: #3c3c3c" in html
+    assert "color: #e8eaed" in html
 
 
 def test_chrome_css_patches_missing_file_noop():
