@@ -58,13 +58,13 @@ CamouForge 当前面向 Windows 10 或更高版本。
 git clone https://github.com/Rycen7822/camouforge.git
 cd camouforge
 uv sync --frozen --no-dev --python 3.12
-cargo build --release
+cargo build --release --locked
 ```
 
 运行开发版本：
 
 ```powershell
-cargo run --release
+cargo run --release --locked
 ```
 
 生成便携目录：
@@ -82,7 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-portable.ps1
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
-cargo test --all
+cargo test --all --locked
 .venv\Scripts\python.exe tests\test_worker_unit.py
 .venv\Scripts\python.exe verify_worker.py
 ```
