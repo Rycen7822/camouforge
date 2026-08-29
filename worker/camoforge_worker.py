@@ -16,11 +16,7 @@ if str(WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(WORKER_DIR))
 
 import sdk_bridge as sdk_bridge
-from browser_patches import (
-    _TITLEBAR_SVG_MARKER,
-    _ensure_session_history_pref,
-    _ensure_titlebar_svg_patch,
-)
+from browser_patches import _ensure_session_history_pref
 from downloads import _save_download
 from manager import Instance, Manager
 from profile_translate import translate_profile, validate

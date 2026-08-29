@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from browser_patches import (
+    _ensure_chrome_css_patches,
     _ensure_macos_emoji_font,
     _ensure_macos_emoji_whitelist,
     _ensure_session_history_pref,
-    _ensure_titlebar_svg_patch,
     _shortcut_extension_dir,
     _shortcut_page,
 )
@@ -76,7 +76,7 @@ class Manager:
             kw = translate_profile(profile, self.user_data_root)
             _ensure_macos_emoji_whitelist()
             _ensure_macos_emoji_font(kw.get("executable_path"))
-            _ensure_titlebar_svg_patch(kw.get("executable_path"))
+            _ensure_chrome_css_patches(kw.get("executable_path"))
             _ensure_session_history_pref(kw.get("executable_path"))
             inst = Instance(profile, bool(kw.get("headless")), kw.get("user_data_dir"))
             self.instances[pid] = inst

@@ -338,24 +338,30 @@ def test_default_executable_path_prefers_exact_name():
         _with_fake_tree(tmp, go)
 
 
-def test_titlebar_patch_appends_and_is_idempotent():
+def test_chrome_css_patches_append_incrementally_and_are_idempotent():
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / "camoufox.exe"
         exe.write_text("")
         css = Path(tmp) / "chrome.css"
-        css.write_text("/* base */\n", encoding="utf-8")
-        w._ensure_titlebar_svg_patch(str(exe))
+        css.write_text(browser_patches._TITLEBAR_SVG_CSS, encoding="utf-8")
+        browser_patches._ensure_chrome_css_patches(str(exe))
         t1 = css.read_text(encoding="utf-8")
-        assert w._TITLEBAR_SVG_MARKER in t1
-        w._ensure_titlebar_svg_patch(str(exe))
+        assert t1.count(browser_patches._TITLEBAR_SVG_MARKER) == 1
+        assert browser_patches._TAB_CLICK_MARKER in t1
+        assert browser_patches._TAB_LAYOUT_MARKER in t1
+        assert "-moz-window-dragging: no-drag" in t1
+        assert "pointer-events: auto" in t1
+        assert ".tabbrowser-tab[fadein]:not([pinned])" in t1
+        assert "max-width: 240px" in t1
+        browser_patches._ensure_chrome_css_patches(str(exe))
         assert css.read_text(encoding="utf-8") == t1
 
 
-def test_titlebar_patch_missing_css_noop():
+def test_chrome_css_patches_missing_file_noop():
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / "camoufox.exe"
         exe.write_text("")
-        w._ensure_titlebar_svg_patch(str(exe))
+        browser_patches._ensure_chrome_css_patches(str(exe))
         assert not (Path(tmp) / "chrome.css").exists()
 
 
