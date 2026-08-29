@@ -34,10 +34,10 @@ profiles/
 .DS_Store
 Thumbs.db
 
-# vendor 是独立 git 仓库（各自管理历史，Cargo.toml 以 rev 钉住）
+# 本机依赖镜像（公开构建直接使用 Cargo.toml 中的上游 Git 源）
 vendor/
 
-# 本机 cargo 覆盖（vendor 加速，机器相关；模板 .cargo/config.toml.example 保留）
+# 本机 Cargo 配置
 .cargo/config.toml
 
 # 临时脚本 / 诊断产物

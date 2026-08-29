@@ -30,7 +30,7 @@ jobs:
         run: uv sync --frozen --no-dev --python 3.12
 
       - name: Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Worker py_compile
         run: .venv\Scripts\python.exe -m compileall -q worker

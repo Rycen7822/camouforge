@@ -63,13 +63,13 @@ Subsequent launches can reuse the local environment.
 git clone https://github.com/Rycen7822/camouforge.git
 cd camouforge
 uv sync --frozen --no-dev --python 3.12
-cargo build --release
+cargo build --release --locked
 ```
 
 Run the development build:
 
 ```powershell
-cargo run --release
+cargo run --release --locked
 ```
 
 Create a portable directory:
@@ -88,7 +88,7 @@ directories are intentionally not included in the repository or package.
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
-cargo test --all
+cargo test --all --locked
 .venv\Scripts\python.exe tests\test_worker_unit.py
 .venv\Scripts\python.exe verify_worker.py
 ```
