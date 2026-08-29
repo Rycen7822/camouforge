@@ -5,6 +5,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "camoufox==0.5.5",
     "browserforge==1.2.4",
+    "fonttools>=4.59,<5",
 ]
 
 [tool.uv]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
+from browser_patches import MACOS_EMOJI_FAMILY
 from sdk_bridge import (
     SDK,
     VALID_OS,
@@ -13,6 +14,21 @@ from sdk_bridge import (
 )
 
 _UBO = "ubo"
+
+
+def _fingerprint_is_macos(data: Dict[str, Any]) -> bool:
+    navigator = data.get("navigator") or {}
+    headers = data.get("headers") or {}
+    user_agent = navigator.get("userAgent") or headers.get("User-Agent") or ""
+    return "Macintosh" in user_agent or "Mac OS X" in user_agent
+
+
+def _with_macos_emoji(fonts: list) -> list:
+    result = list(fonts)
+    if MACOS_EMOJI_FAMILY not in result:
+        result.append(MACOS_EMOJI_FAMILY)
+    return result
+
 
 def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str, Any]:
     """把 CamouForge Profile JSON 转成 Camoufox(**kwargs) 参数。
@@ -29,6 +45,9 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
         if bad:
             raise ValueError(f"invalid OS values: {bad} (expected any of {VALID_OS})")
         kw["os"] = os_list[0] if len(os_list) == 1 else os_list
+    macos_target = os_list == ["macos"] or _fingerprint_is_macos(
+        lo.get("fingerprint") or {}
+    )
 
     hm = lo.get("humanize")
     if hm and hm.get("mode") != "off":
@@ -94,8 +113,22 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
         loc = kw["locale"]
         kw["locale"] = loc[0] if len(loc) == 1 else loc
 
-    if lo.get("fonts") is not None:
-        kw["fonts"] = lo["fonts"]
+    config_fonts = config.get("fonts")
+    if macos_target and isinstance(config_fonts, list) and config_fonts:
+        config["fonts"] = _with_macos_emoji(config_fonts)
+    profile_fonts = lo.get("fonts")
+    if profile_fonts:
+        kw["fonts"] = (
+            _with_macos_emoji(profile_fonts)
+            if macos_target
+            else list(profile_fonts)
+        )
+    elif macos_target and not config_fonts and not (
+        fp_preset and fp_preset.get("mode") != "off"
+    ):
+        from camoufox.fingerprints import _generate_random_font_subset
+
+        kw["fonts"] = _with_macos_emoji(_generate_random_font_subset("macos"))
     if lo.get("custom_fonts_only") is not None:
         kw["custom_fonts_only"] = lo["custom_fonts_only"]
 
