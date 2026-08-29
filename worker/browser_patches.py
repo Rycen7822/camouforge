@@ -67,10 +67,73 @@ _TAB_LAYOUT_CSS = """
 }
 """
 
+_CHROME_DARK_THEME_MARKER = "CAMOUFORGE_CHROME_DARK_THEME"
+_CHROME_DARK_THEME_CSS = """
+/* Match Chrome's dark theme color hierarchy: a near-black inactive tab strip,
+ * a charcoal active tab/navigation surface, and a dark omnibox that turns
+ * light while focused. Marker: CAMOUFORGE_CHROME_DARK_THEME. */
+:root {
+  --lwt-accent-color: #1f2020 !important;
+  --lwt-text-color: #e8eaed !important;
+  --toolbar-bgcolor: #3c3c3c !important;
+  --toolbar-color: #e8eaed !important;
+  --tab-selected-bgcolor: #3c3c3c !important;
+  --tab-selected-textcolor: #e8eaed !important;
+  --toolbar-field-background-color: #292a2d !important;
+  --toolbar-field-color: #e8eaed !important;
+  --toolbar-field-focus-background-color: #f1f3f4 !important;
+  --toolbar-field-focus-color: #202124 !important;
+  --toolbar-field-border-color: transparent !important;
+  --toolbar-field-focus-border-color: #8ab4f8 !important;
+  --toolbarbutton-icon-fill: #e8eaed !important;
+  --chrome-content-separator-color: #3c3c3c !important;
+}
+
+#navigator-toolbox,
+#TabsToolbar {
+  background-color: #1f2020 !important;
+  color: #e8eaed !important;
+}
+
+#nav-bar {
+  background-color: #3c3c3c !important;
+  color: #e8eaed !important;
+}
+
+.tabbrowser-tab[selected="true"] .tab-background {
+  background-color: #3c3c3c !important;
+}
+
+.tabbrowser-tab:not([selected="true"]):hover .tab-background {
+  background-color: #292a2d !important;
+}
+
+#urlbar:not(:focus-within):not([open]) > #urlbar-background {
+  background-color: #292a2d !important;
+}
+
+#urlbar:focus-within > #urlbar-background,
+#urlbar[open] > #urlbar-background {
+  background-color: #f1f3f4 !important;
+  border-color: #8ab4f8 !important;
+}
+
+#urlbar:focus-within,
+#urlbar[open] {
+  color: #202124 !important;
+}
+
+#urlbar:focus-within .urlbar-icon,
+#urlbar[open] .urlbar-icon {
+  fill: #5f6368 !important;
+}
+"""
+
 _CHROME_CSS_PATCHES = (
     (_TITLEBAR_SVG_MARKER, _TITLEBAR_SVG_CSS),
     (_TAB_CLICK_MARKER, _TAB_CLICK_CSS),
     (_TAB_LAYOUT_MARKER, _TAB_LAYOUT_CSS),
+    (_CHROME_DARK_THEME_MARKER, _CHROME_DARK_THEME_CSS),
 )
 
 
@@ -276,15 +339,15 @@ _SHORTCUTS_PAGE_TEMPLATE = """<!doctype html>
   html, body { height: 100%; }
   body {
     margin: 0; font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC",
-      "Microsoft YaHei", sans-serif; background: #0f1115; color: #e6e6e6;
+      "Microsoft YaHei", sans-serif; background: #3c3c3c; color: #e8eaed;
     display: flex; justify-content: center; align-items: flex-start;
   }
   .wrap { width: 100%; max-width: 960px; padding: 48px 32px; box-sizing: border-box; }
-  h1 { font-size: 20px; font-weight: 600; margin: 0 0 28px; color: #f5f5f5; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 28px; color: #f1f3f4; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 20px; }
   .tile { display: flex; flex-direction: column; align-items: center; gap: 10px;
-          text-decoration: none; color: #e6e6e6; padding: 14px 8px; border-radius: 12px; }
-  .tile:hover { background: #1a1d24; }
+          text-decoration: none; color: #e8eaed; padding: 14px 8px; border-radius: 12px; }
+  .tile:hover { background: #4a4a4a; }
   .icon { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center;
           justify-content: center; font-size: 22px; font-weight: 600; color: #fff; }
   .name { font-size: 13px; text-align: center; max-width: 96px; overflow: hidden;
