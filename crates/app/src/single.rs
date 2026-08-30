@@ -4,14 +4,18 @@
 //! 这里用命名 Mutex 判断是否已有实例：
 //! - 新实例发现已有实例在跑时，把启动请求（`--profile <id>`，可为空）写入
 //!   `data_dir/pending_launch/req_<pid>.txt` 后立即退出，不启动任何东西；
-//! - 老实例每秒轮询该目录，读取请求：恢复主窗口并激活，若带 profile id 则自动启动。
+//! - 新实例写完后触发命名事件；老实例的等待线程收到事件才读取请求目录。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, WAIT_OBJECT_0};
+use windows::Win32::System::Threading::{
+    CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
+    INFINITE,
+};
 
 const MUTEX_NAME: &str = "Local\\camoforge.single";
+const EVENT_NAME: &str = "Local\\camoforge.launch-request";
 
 /// 尝试获取单实例锁。
 /// 返回 `true` = 本进程是唯一实例（锁持有至进程退出）；
@@ -46,7 +50,22 @@ pub fn forward_launch_request(profile_id: Option<&str>, data_dir: &Path) {
     }
     let file = dir.join(format!("req_{}.txt", std::process::id()));
     let content = profile_id.unwrap_or("");
-    let _ = std::fs::write(file, content);
+    if std::fs::write(file, content).is_err() {
+        return;
+    }
+    let name = windows::core::HSTRING::from(EVENT_NAME);
+    if let Ok(event) = unsafe {
+        OpenEventW(
+            EVENT_MODIFY_STATE,
+            false,
+            windows::core::PCWSTR(name.as_ptr()),
+        )
+    } {
+        unsafe {
+            let _ = SetEvent(event);
+            let _ = CloseHandle(event);
+        }
+    }
 }
 
 pub fn take_launch_requests(data_dir: &Path) -> Vec<Option<String>> {
@@ -68,4 +87,33 @@ pub fn take_launch_requests(data_dir: &Path) -> Vec<Option<String>> {
             }
         })
         .collect()
+}
+
+pub fn launch_request_events(data_dir: PathBuf) -> async_channel::Receiver<Option<String>> {
+    let (tx, rx) = async_channel::unbounded();
+    let _ = std::thread::Builder::new()
+        .name("camoforge-single-instance".into())
+        .spawn(move || {
+            let name = windows::core::HSTRING::from(EVENT_NAME);
+            let Ok(event) =
+                (unsafe { CreateEventW(None, false, false, windows::core::PCWSTR(name.as_ptr())) })
+            else {
+                return;
+            };
+
+            'events: loop {
+                for request in take_launch_requests(&data_dir) {
+                    if tx.send_blocking(request).is_err() {
+                        break 'events;
+                    }
+                }
+                if unsafe { WaitForSingleObject(event, INFINITE) } != WAIT_OBJECT_0 {
+                    break;
+                }
+            }
+            unsafe {
+                let _ = CloseHandle(event);
+            }
+        });
+    rx
 }

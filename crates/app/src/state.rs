@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use camoforge_protocol::{Profile, WebglCard};
-use gpui::{Context, Entity, FocusHandle, Window};
+use gpui::{AppContext as _, Context, Entity, FocusHandle, Task, Window};
 
 use crate::browser::{self, DownloadMsg, DownloadPhase, DownloadState, Release};
 use crate::logging::LogSink;
@@ -140,7 +140,6 @@ pub(crate) struct WorkerState {
     pub generating: bool,
     pub ready: bool,
     pub supervisor: Option<Arc<WorkerSupervisor>>,
-    pub event_rx: Option<Arc<std::sync::Mutex<std::sync::mpsc::Receiver<SupervisorEvent>>>>,
     pub pending_auto_launch: Option<String>,
     pub launch_error: Option<String>,
 }
@@ -154,7 +153,6 @@ impl WorkerState {
             generating: false,
             ready: false,
             supervisor: None,
-            event_rx: None,
             pending_auto_launch,
             launch_error: None,
         }
@@ -172,15 +170,17 @@ pub(crate) struct BrowserCatalog {
     pub installed_versions: Vec<String>,
     pub releases_root: PathBuf,
     pub downloads: HashMap<String, DownloadState>,
-    pub download_tx: Option<std::sync::mpsc::Sender<DownloadMsg>>,
-    pub download_rx: Option<Arc<std::sync::Mutex<std::sync::mpsc::Receiver<DownloadMsg>>>>,
+    pub download_tx: async_channel::Sender<DownloadMsg>,
     pub version_revision: u64,
     pub settings_release_pick: Option<String>,
 }
 
 impl BrowserCatalog {
-    fn new(releases_root: PathBuf, installed_versions: Vec<String>) -> Self {
-        let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadMsg>();
+    fn new(
+        releases_root: PathBuf,
+        installed_versions: Vec<String>,
+        download_tx: async_channel::Sender<DownloadMsg>,
+    ) -> Self {
         Self {
             webgl_cards: Vec::new(),
             font_options: Vec::new(),
@@ -192,8 +192,7 @@ impl BrowserCatalog {
             installed_versions,
             releases_root,
             downloads: HashMap::new(),
-            download_tx: Some(download_tx),
-            download_rx: Some(Arc::new(std::sync::Mutex::new(download_rx))),
+            download_tx,
             version_revision: 0,
             settings_release_pick: None,
         }
@@ -206,23 +205,22 @@ pub(crate) struct PythonEnvState {
     pub busy: bool,
     pub info: Option<python_env::PythonEnvInfo>,
     pub error: Option<String>,
-    pub tx: Option<std::sync::mpsc::Sender<python_env::PythonEnvPhase>>,
-    pub progress_rx:
-        Option<Arc<std::sync::Mutex<std::sync::mpsc::Receiver<python_env::PythonEnvPhase>>>>,
+    pub tx: async_channel::Sender<python_env::PythonEnvPhase>,
     pub guard: python_env::EnsureGuard,
 }
 
 impl PythonEnvState {
-    fn new(layout: python_env::RuntimeLayout) -> Self {
-        let (tx, progress_rx) = std::sync::mpsc::channel::<python_env::PythonEnvPhase>();
+    fn new(
+        layout: python_env::RuntimeLayout,
+        tx: async_channel::Sender<python_env::PythonEnvPhase>,
+    ) -> Self {
         Self {
             layout,
             status: python_env::PythonEnvPhase::Checking,
             busy: false,
             info: None,
             error: None,
-            tx: Some(tx),
-            progress_rx: Some(Arc::new(std::sync::Mutex::new(progress_rx))),
+            tx,
             guard: python_env::EnsureGuard::default(),
         }
     }
@@ -243,6 +241,26 @@ pub struct AppState {
     pub(crate) logs: Vec<LogLine>,
     pub(crate) log_sink: LogSink,
     pub(crate) pending_notifications: Vec<(bool, String)>,
+    profile_save_task: Option<Task<()>>,
+    pending_profile_save: Option<Profile>,
+}
+
+fn listen<T: Send + 'static>(
+    rx: async_channel::Receiver<T>,
+    handler: fn(&mut AppState, T, &mut Context<AppState>),
+    cx: &mut Context<AppState>,
+) {
+    cx.spawn(async move |weak, cx| {
+        while let Ok(event) = rx.recv().await {
+            if weak
+                .update(cx, |state, cx| handler(state, event, cx))
+                .is_err()
+            {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 impl AppState {
@@ -259,16 +277,19 @@ impl AppState {
         // 无 view 上下文处（窗口关闭回调）读取的设置走全局镜像
         settings.sync_globals();
         let releases_root = browser::releases_root();
-        // 启动时无进行中下载，此处的 .part-* 都是上次中断的残留
-        browser::cleanup_part_dirs(&releases_root);
         let installed_versions = browser::scan_installed(&releases_root);
+        let cleanup_root = releases_root.clone();
+        cx.background_spawn(async move { browser::cleanup_part_dirs(&cleanup_root) })
+            .detach();
+        let (download_tx, download_events) = async_channel::unbounded();
+        let (python_tx, python_events) = async_channel::unbounded();
         let state = Self {
             data_dir,
             profile: ProfileState::new(store),
             form: FormCache::default(),
             worker: WorkerState::new(auto_launch),
-            browsers: BrowserCatalog::new(releases_root, installed_versions),
-            python: PythonEnvState::new(runtime_layout),
+            browsers: BrowserCatalog::new(releases_root, installed_versions, download_tx),
+            python: PythonEnvState::new(runtime_layout, python_tx),
             current_view: AppView::Profiles,
             tab: Tab::Launch,
             show_logs: false,
@@ -280,7 +301,11 @@ impl AppState {
             }],
             log_sink,
             pending_notifications: Vec::new(),
+            profile_save_task: None,
+            pending_profile_save: None,
         };
+        listen(download_events, Self::handle_download_msg, cx);
+        listen(python_events, Self::handle_python_phase, cx);
         // release 列表每次打开更新一次；失败不阻塞界面
         cx.spawn(async move |weak, cx| {
             let result = cx
@@ -309,6 +334,16 @@ impl AppState {
         })
         .detach();
         state
+    }
+
+    pub fn attach_supervisor(
+        &mut self,
+        supervisor: Arc<WorkerSupervisor>,
+        events: async_channel::Receiver<SupervisorEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        self.worker.supervisor = Some(supervisor);
+        listen(events, Self::handle_supervisor_event, cx);
     }
 
     pub fn current(&self) -> Option<&Profile> {
@@ -356,6 +391,7 @@ impl AppState {
     }
 
     pub fn new_profile(&mut self, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         let mut n = self.profile.profiles.len() + 1;
         while self
             .profile
@@ -381,6 +417,7 @@ impl AppState {
     }
 
     pub fn duplicate_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         if let Some(src) = self.profile.profiles.iter().find(|p| p.id == id).cloned() {
             let mut copy = src.clone();
             copy.id = uuid::Uuid::new_v4().to_string();
@@ -401,6 +438,7 @@ impl AppState {
     }
 
     pub fn delete_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         if self.worker.running.contains_key(id) {
             self.log("error", "该身份正在运行，请先停止再删除");
             return;
@@ -432,6 +470,7 @@ impl AppState {
         let Some(id) = self.profile.renaming.clone() else {
             return;
         };
+        self.flush_pending_profile_save();
         let new_name = new_name.trim().to_string();
         self.profile.renaming = None;
         self.profile.rename_input = None;
@@ -454,14 +493,46 @@ impl AppState {
         cx.notify();
     }
 
-    /// 自动保存：把当前 profile 写入磁盘（原子写）。失败只记日志，不打断编辑。
-    pub fn persist_current(&mut self) {
-        let Some(p) = self.current().cloned() else {
-            return;
-        };
-        if let Err(e) = self.profile.store.save(&p) {
+    fn persist_profile(&mut self, profile: Profile) {
+        if let Err(e) = self.profile.store.save(&profile) {
             self.log("error", format!("自动保存失败: {e}"));
         }
+    }
+
+    pub fn persist_current(&mut self) {
+        self.profile_save_task.take();
+        self.pending_profile_save = None;
+        let Some(profile) = self.current().cloned() else {
+            return;
+        };
+        self.persist_profile(profile);
+    }
+
+    pub fn flush_pending_profile_save(&mut self) {
+        self.profile_save_task.take();
+        if let Some(profile) = self.pending_profile_save.take() {
+            self.persist_profile(profile);
+        }
+    }
+
+    /// 连续输入只在静止 400ms 后写一次磁盘；新输入会取消前一个计时任务。
+    pub fn schedule_persist_current(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.current().cloned() else {
+            return;
+        };
+        self.profile_save_task.take();
+        self.pending_profile_save = Some(profile);
+        self.profile_save_task = Some(cx.spawn(async move |weak, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(400))
+                .await;
+            weak.update(cx, |state, _cx| {
+                if let Some(profile) = state.pending_profile_save.take() {
+                    state.persist_profile(profile);
+                }
+            })
+            .ok();
+        }));
     }
 
     fn clear_field_caches(&mut self) {
@@ -501,6 +572,7 @@ impl AppState {
 
     pub fn select_sidebar_profile(&mut self, id: &str, cx: &mut Context<Self>) {
         self.current_view = AppView::Profiles;
+        self.flush_pending_profile_save();
         // 先重读磁盘：外部直接改 JSON 时，选中即显示最新值
         self.reload_profiles_from_disk();
         if self.profile.profiles.iter().any(|p| p.id == id) {
@@ -528,7 +600,6 @@ impl AppState {
 
     pub fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;
-        self.reload_profiles_from_disk();
         // Tab 键已进入缓存 key，切换时保留实体；Raw JSON 需单独推送新快照。
         self.profile.raw_json_text.clear();
         self.refresh_raw_json_snapshot();
@@ -631,12 +702,6 @@ impl AppState {
         }
     }
 
-    pub fn dirty_tick(&mut self, cx: &mut Context<Self>) {
-        self.drain_events(cx);
-        self.drain_downloads(cx);
-        self.drain_python_env(cx);
-    }
-
     /// 后台自举/修复 Python 环境；成功后启动 worker。
     /// worker 或浏览器实例运行中不得原地替换 .venv，直接拒绝。
     pub fn ensure_python_env(&mut self, mode: python_env::EnsureMode, cx: &mut Context<Self>) {
@@ -664,14 +729,14 @@ impl AppState {
         self.python.status = python_env::PythonEnvPhase::Checking;
         self.python.error = None;
         let layout = self.python.layout.clone();
-        let tx = self.python.tx.clone().expect("python env tx");
+        let tx = self.python.tx.clone();
         let started = std::time::Instant::now();
         cx.spawn(async move |weak, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     python_env::ensure_python_env(&layout, mode, |phase| {
-                        let _ = tx.send(phase);
+                        let _ = tx.send_blocking(phase);
                     })
                 })
                 .await;
@@ -719,19 +784,9 @@ impl AppState {
         cx.notify();
     }
 
-    fn drain_python_env(&mut self, cx: &mut Context<Self>) {
-        let Some(rx) = &self.python.progress_rx else {
-            return;
-        };
-        let rx = rx.lock().unwrap();
-        let mut changed = false;
-        while let Ok(phase) = rx.try_recv() {
-            self.python.status = phase;
-            changed = true;
-        }
-        if changed {
-            cx.notify();
-        }
+    fn handle_python_phase(&mut self, phase: python_env::PythonEnvPhase, cx: &mut Context<Self>) {
+        self.python.status = phase;
+        cx.notify();
     }
 
     pub fn refresh_releases(&mut self, cx: &mut Context<Self>) {
@@ -797,9 +852,7 @@ impl AppState {
             cx.notify();
             return;
         };
-        let Some(tx) = self.browsers.download_tx.clone() else {
-            return;
-        };
+        let tx = self.browsers.download_tx.clone();
         self.browsers.downloads.insert(
             full.to_string(),
             DownloadState {
@@ -820,12 +873,12 @@ impl AppState {
         let root = self.browsers.releases_root.clone();
         std::thread::spawn(move || match browser::download_release(&rel, &root, &tx) {
             Ok(()) => {
-                let _ = tx.send(DownloadMsg::Done {
+                let _ = tx.send_blocking(DownloadMsg::Done {
                     full: rel.full.clone(),
                 });
             }
             Err(e) => {
-                let _ = tx.send(DownloadMsg::Failed {
+                let _ = tx.send_blocking(DownloadMsg::Failed {
                     full: rel.full.clone(),
                     error: format!("{e:#}"),
                 });
@@ -834,50 +887,38 @@ impl AppState {
         cx.notify();
     }
 
-    fn drain_downloads(&mut self, cx: &mut Context<Self>) {
-        let msgs: Vec<DownloadMsg> = {
-            let Some(rx) = &self.browsers.download_rx else {
-                return;
-            };
-            let rx = rx.lock().unwrap();
-            std::iter::from_fn(|| rx.try_recv().ok()).collect()
-        };
-        if msgs.is_empty() {
-            return;
-        }
-        for msg in msgs {
-            match msg {
-                DownloadMsg::Progress {
-                    full,
-                    downloaded,
-                    total,
-                } => {
-                    if let Some(dl) = self.browsers.downloads.get_mut(&full) {
-                        dl.downloaded = downloaded;
-                        dl.total = total;
-                    }
+    fn handle_download_msg(&mut self, message: DownloadMsg, cx: &mut Context<Self>) {
+        match message {
+            DownloadMsg::Progress {
+                full,
+                downloaded,
+                total,
+            } => {
+                if let Some(download) = self.browsers.downloads.get_mut(&full) {
+                    download.downloaded = downloaded;
+                    download.total = total;
                 }
-                DownloadMsg::Extracting { full } => {
-                    if let Some(dl) = self.browsers.downloads.get_mut(&full) {
-                        dl.phase = DownloadPhase::Extracting;
-                    }
+            }
+            DownloadMsg::Extracting { full } => {
+                if let Some(download) = self.browsers.downloads.get_mut(&full) {
+                    download.phase = DownloadPhase::Extracting;
                 }
-                DownloadMsg::Done { full } => {
-                    self.browsers.downloads.remove(&full);
-                    self.browsers.installed_versions =
-                        browser::scan_installed(&self.browsers.releases_root);
-                    self.browsers.version_revision += 1;
-                    self.pending_notifications
-                        .push((false, format!("camoufox {full} 下载完成")));
-                    self.log("info", format!("camoufox {full} 下载完成"));
-                }
-                DownloadMsg::Failed { full, error } => {
-                    self.browsers.downloads.remove(&full);
-                    self.browsers.version_revision += 1;
-                    self.pending_notifications
-                        .push((true, format!("camoufox {full} 下载失败：{error}")));
-                    self.log("error", format!("camoufox {full} 下载失败: {error}"));
-                }
+            }
+            DownloadMsg::Done { full } => {
+                self.browsers.downloads.remove(&full);
+                self.browsers.installed_versions =
+                    browser::scan_installed(&self.browsers.releases_root);
+                self.browsers.version_revision += 1;
+                self.pending_notifications
+                    .push((false, format!("camoufox {full} 下载完成")));
+                self.log("info", format!("camoufox {full} 下载完成"));
+            }
+            DownloadMsg::Failed { full, error } => {
+                self.browsers.downloads.remove(&full);
+                self.browsers.version_revision += 1;
+                self.pending_notifications
+                    .push((true, format!("camoufox {full} 下载失败：{error}")));
+                self.log("error", format!("camoufox {full} 下载失败: {error}"));
             }
         }
         cx.notify();
@@ -912,7 +953,7 @@ impl AppState {
                     }
                     p.updated_at = camoforge_protocol::unix_ts();
                 }
-                self.persist_current();
+                self.schedule_persist_current(cx);
             }
             Err(msg) => {
                 // 保留上一次合法值；红字提示直到输入合法
@@ -1001,16 +1042,26 @@ impl AppState {
         url: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        self.mutate_current_profile(cx, |profile| {
+        let mut changed = false;
+        if let Some(profile) = self.current_mut() {
             if let Some(shortcut) = profile.launch.shortcuts.get_mut(idx) {
                 if let Some(name) = name {
                     shortcut.name = name.to_string();
+                    changed = true;
                 }
                 if let Some(url) = url {
                     shortcut.url = url.to_string();
+                    changed = true;
+                }
+                if changed {
+                    profile.updated_at = camoforge_protocol::unix_ts();
                 }
             }
-        });
+        }
+        if changed {
+            self.schedule_persist_current(cx);
+            cx.notify();
+        }
     }
 
     pub fn apply_raw_json(&mut self, cx: &mut Context<Self>) {
@@ -1036,6 +1087,7 @@ impl AppState {
     }
 
     pub fn launch_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         if self.profile.profiles.iter().any(|p| p.id == id) {
             self.profile.selected = Some(id.to_string());
             self.launch_current(cx);
@@ -1045,6 +1097,7 @@ impl AppState {
     }
 
     pub fn launch_current(&mut self, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         let Some(mut p) = self.current().cloned() else {
             return;
         };
@@ -1228,6 +1281,7 @@ impl AppState {
     }
 
     pub fn validate_current(&mut self, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         let Some(mut p) = self.current().cloned() else {
             return;
         };
@@ -1276,6 +1330,7 @@ impl AppState {
     }
 
     pub fn generate_fingerprint_current(&mut self, cx: &mut Context<Self>) {
+        self.flush_pending_profile_save();
         let Some(p) = self.current().cloned() else {
             return;
         };
@@ -1534,63 +1589,48 @@ impl AppState {
         }
     }
 
-    pub fn drain_events(&mut self, cx: &mut Context<Self>) {
-        let mut events = Vec::new();
-        if let Some(rx) = &self.worker.event_rx {
-            let rx = rx.lock().unwrap();
-            while let Ok(ev) = rx.try_recv() {
-                events.push(ev);
-            }
-        }
-        for ev in events {
-            match ev {
-                SupervisorEvent::WorkerReady { camoufox, browser } => {
-                    self.worker.ready = true;
-                    self.log(
-                        "info",
-                        format!(
-                            "worker 就绪：camoufox={} browser={}",
-                            camoufox.as_deref().unwrap_or("?"),
-                            browser.as_deref().unwrap_or("?")
-                        ),
-                    );
-                    // 从快捷方式启动时，worker 就绪后立即启动指定 profile。
-                    if let Some(id) = self.worker.pending_auto_launch.take() {
-                        self.log("info", format!("快捷方式启动：自动启动身份 {id}"));
-                        self.launch_profile(&id, cx);
-                    }
-                    cx.notify();
-                }
-                SupervisorEvent::WorkerRestarted { attempt } => {
-                    // worker 崩溃重启后新进程实例表为空：清空本地 running，避免 UI
-                    // 谎报「运行实例/停止按钮」指向已失去控制的浏览器。
-                    self.worker.running.clear();
-                    self.log(
-                        "warn",
-                        format!("worker 重启（第 {attempt} 次），已清空运行实例"),
-                    );
-                    cx.notify();
-                }
-                SupervisorEvent::WorkerFailed { reason } => {
-                    self.worker.ready = false;
-                    self.worker.running.clear();
-                    self.log("error", format!("worker 退出: {reason}"));
-                    cx.notify();
-                }
-                SupervisorEvent::InstanceExited { profile_id, reason } => {
-                    let name = self
-                        .profile
-                        .profiles
-                        .iter()
-                        .find(|p| p.id == profile_id)
-                        .map(|p| p.name.clone())
-                        .unwrap_or_else(|| profile_id.clone());
-                    self.worker.running.remove(&profile_id);
-                    self.log("info", format!("{name} 已退出: {reason}"));
-                    cx.notify();
+    fn handle_supervisor_event(&mut self, event: SupervisorEvent, cx: &mut Context<Self>) {
+        match event {
+            SupervisorEvent::WorkerReady { camoufox, browser } => {
+                self.worker.ready = true;
+                self.log(
+                    "info",
+                    format!(
+                        "worker 就绪：camoufox={} browser={}",
+                        camoufox.as_deref().unwrap_or("?"),
+                        browser.as_deref().unwrap_or("?")
+                    ),
+                );
+                if let Some(id) = self.worker.pending_auto_launch.take() {
+                    self.log("info", format!("快捷方式启动：自动启动身份 {id}"));
+                    self.launch_profile(&id, cx);
                 }
             }
+            SupervisorEvent::WorkerRestarted { attempt } => {
+                self.worker.running.clear();
+                self.log(
+                    "warn",
+                    format!("worker 重启（第 {attempt} 次），已清空运行实例"),
+                );
+            }
+            SupervisorEvent::WorkerFailed { reason } => {
+                self.worker.ready = false;
+                self.worker.running.clear();
+                self.log("error", format!("worker 退出: {reason}"));
+            }
+            SupervisorEvent::InstanceExited { profile_id, reason } => {
+                let name = self
+                    .profile
+                    .profiles
+                    .iter()
+                    .find(|p| p.id == profile_id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| profile_id.clone());
+                self.worker.running.remove(&profile_id);
+                self.log("info", format!("{name} 已退出: {reason}"));
+            }
         }
+        cx.notify();
     }
 }
 
@@ -1634,7 +1674,6 @@ fn clean_error(msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::AppContext as _;
     use std::path::Path;
 
     fn app_window(
@@ -1712,6 +1751,62 @@ mod tests {
             })
             .unwrap();
         assert!(retained.get(), "切换 Tab 不应重建其他 Tab 的控件缓存");
+    }
+
+    #[gpui::test]
+    fn text_edits_defer_disk_write_and_explicit_flush_keeps_latest(cx: &mut gpui::TestAppContext) {
+        let (_dir, window) = app_window(cx);
+        let verified = std::cell::Cell::new(false);
+        window
+            .update(cx, |state, _window, cx| {
+                state.new_profile(cx);
+                state.set_config_value(
+                    "Navigator::hardwareConcurrency",
+                    "navigator.hardwareConcurrency",
+                    "4",
+                    cx,
+                );
+                let before = state.profile.store.list();
+                let deferred = !before[0]
+                    .config
+                    .contains_key("navigator.hardwareConcurrency")
+                    && state.profile_save_task.is_some();
+
+                state.set_config_value(
+                    "Navigator::hardwareConcurrency",
+                    "navigator.hardwareConcurrency",
+                    "8",
+                    cx,
+                );
+                state.flush_pending_profile_save();
+                let after = state.profile.store.list();
+                verified.set(
+                    deferred
+                        && state.profile_save_task.is_none()
+                        && after[0]
+                            .config
+                            .get("navigator.hardwareConcurrency")
+                            .and_then(serde_json::Value::as_i64)
+                            == Some(8),
+                );
+            })
+            .unwrap();
+        assert!(verified.get(), "连续文本编辑应延迟写盘，显式刷新保存最新值");
+    }
+
+    #[gpui::test]
+    fn tab_switch_does_not_reload_profile_directory(cx: &mut gpui::TestAppContext) {
+        let (dir, window) = app_window(cx);
+        let corrupt = dir.path().join("profiles/external.json");
+        std::fs::write(&corrupt, "{not json").unwrap();
+
+        window
+            .update(cx, |state, _window, cx| {
+                state.select_tab(Tab::ScreenWindow, cx);
+            })
+            .unwrap();
+
+        assert!(corrupt.exists(), "切换 Tab 不应扫描或改写 profile 目录");
     }
 
     #[gpui::test]

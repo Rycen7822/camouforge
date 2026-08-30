@@ -15,7 +15,6 @@ class _Sdk:
     def __init__(self) -> None:
         self._loaded = False
         self.camoufox: Any = None
-        self.camoufox_sync: Any = None
         self.camoufox_fp: Any = None
         self.warnings: Any = None
         self.default_addons: Any = None
@@ -25,12 +24,11 @@ class _Sdk:
             return
         _relocate_sdk_cache()
         import camoufox
-        import camoufox.sync_api
+        import camoufox.async_api
         import camoufox.fingerprints
         import camoufox._warnings
         import camoufox.addons
         self.camoufox = camoufox
-        self.camoufox_sync = camoufox_sync = camoufox.sync_api
         self.camoufox_fp = camoufox.fingerprints
         self.warnings = camoufox._warnings
         self.default_addons = camoufox.addons
@@ -268,12 +266,7 @@ def list_voices(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"voices": items}
 
 def _preload_sdk() -> None:
-    """后台预热 SDK 导入（失败静默；后续 launch 仍会按需导入）。
-
-    首次 launch 里 `from camoufox.sync_api import Camoufox` 会拉 Playwright +
-    camoufox（约 1~2s）。提前 import 让这段耗时与 app 的 ready→自动启动→RPC
-    往返重叠，缩短快捷方式启动到浏览器窗口出现的延迟。
-    """
+    """后台预热异步 SDK；失败留给实际调用处理。"""
     try:
         SDK.load()
         import browserforge.fingerprints  # noqa: F401

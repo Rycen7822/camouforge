@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
+async-channel = "2"
 sha2 = "0.10"
 # native-certs 读系统证书库而非捆绑根证书：兼容 Clash 等装进系统库的 TLS 中间人根证书
 ureq = { version = "2", default-features = false, features = ["tls", "native-certs"] }

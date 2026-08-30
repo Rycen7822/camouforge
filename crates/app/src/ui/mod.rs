@@ -31,7 +31,6 @@ use widgets::status_dot;
 
 impl Render for AppState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.drain_events(cx);
         self.apply_pending_field_values(window, cx);
         if let Some(msg) = self.worker.launch_error.take() {
             window.open_alert_dialog(cx, move |alert, _w, _cx| {

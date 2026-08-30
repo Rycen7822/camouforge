@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import os
-import queue
 import sys
 import threading
 import time
@@ -20,7 +20,6 @@ from browser_patches import (
 from downloads import (
     _attach_close_watcher,
     _attach_download_handler,
-    _pump_playwright,
     _resolve_downloads_dir,
 )
 from profile_translate import translate_profile
@@ -40,18 +39,49 @@ class Instance:
         self.pid: Optional[int] = None  # Playwright 驱动（node）pid
         self.browser_pid: Optional[int] = None  # 真实浏览器主进程 pid（驱动的直接子进程）
         self.started_at = _now()
-        self.q: "queue.Queue[Optional[Any]]" = queue.Queue()
-        self.ready = threading.Event()  # 启动完成/失败信号（独立于命令队列）
+        self.ready = threading.Event()
         self.response_sent = threading.Event()  # launch 响应已 flush（Manager.launch_done 置位）
-        self.browser_gone = threading.Event()  # 浏览器进程退出（用户直接关窗等）
-        self.stop_requested = False  # 经由 stop 命令的正常停止
+        self.stop_requested = False
         self.lock = threading.Lock()
         self.alive = True
         self.thread: Optional[threading.Thread] = None
         self.exit_reason: Optional[str] = None
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.stop_event: Optional[asyncio.Event] = None
+        self.download_tasks: set[asyncio.Task[Any]] = set()
+        self.download_slots: Optional[asyncio.Semaphore] = None
+        self.download_name_lock: Optional[asyncio.Lock] = None
+        self.download_targets: set[Path] = set()
+        self.accept_downloads = True
 
-    def submit(self, fn):
-        self.q.put(fn)
+    def wake(self) -> None:
+        loop = self.loop
+        event = self.stop_event
+        if loop is None or event is None:
+            return
+        try:
+            loop.call_soon_threadsafe(event.set)
+        except RuntimeError:
+            pass  # 事件循环已关闭，无需再唤醒
+
+    def bind_loop(self) -> asyncio.Event:
+        with self.lock:
+            self.loop = asyncio.get_running_loop()
+            event = self.stop_event = asyncio.Event()
+            if self.stop_requested:
+                event.set()
+            return event
+
+    def request_stop(self) -> None:
+        with self.lock:
+            self.stop_requested = True
+        self.wake()
+
+    def notify_exit(self, reason: str) -> None:
+        with self.lock:
+            if not self.stop_requested and self.exit_reason is None:
+                self.exit_reason = reason
+        self.wake()
 
 
 def _now() -> int:
@@ -60,7 +90,7 @@ def _now() -> int:
 
 class Manager:
     def __init__(self, emit):
-        self.emit = emit  # 事件回调: emit(event, data)
+        self.emit = emit
         self.instances: Dict[str, Instance] = {}
         self.big_lock = threading.Lock()
         self.user_data_root = Path(os.environ.get("CAMOFORGE_DATA_DIR", Path.home() / ".camoforge")) / "user_data"
@@ -118,33 +148,33 @@ class Manager:
                     addons.append(ext_dir)
                 kw["addons"] = addons
 
-        def run(inst: Instance):
-            browser = None
+        async def run_async(inst: Instance) -> None:
+            cm = None
             launched = False
+            stop_event = inst.bind_loop()
+            inst.download_slots = asyncio.Semaphore(2)
+            inst.download_name_lock = asyncio.Lock()
             try:
-                from camoufox.sync_api import Camoufox
-                cm = Camoufox(**kw)
-                browser = cm.__enter__()
+                from camoufox.async_api import AsyncCamoufox
+
+                cm = AsyncCamoufox(**kw)
+                browser = await cm.__aenter__()
                 launched = True
-                # 下载落盘 + 初始页：持久化上下文时 browser 即 BrowserContext
-                # （accept_downloads 已随 launch_persistent_context 传入，enter 后
-                # browser.pages 已有 1 页）；非持久化时 browser 是 Browser，须显式
-                # new_context(accept_downloads=True) 并把 handler 挂到 context——否则
-                # 下载被 Juggler 静默丢弃，且 Browser 本身没有 download 事件。
+                # 持久化模式返回 BrowserContext；非持久化模式必须显式创建允许下载的 context。
                 persistent = bool(kw.get("persistent_context"))
                 page = None
                 try:
                     if persistent:
                         pages = getattr(browser, "pages", None)
-                        page = pages[0] if pages else browser.new_page()
+                        page = pages[0] if pages else await browser.new_page()
                         _attach_download_handler(browser, inst, downloads_dir)
                         _attach_close_watcher(browser, inst)
                     else:
-                        context = browser.new_context(accept_downloads=True)
+                        context = await browser.new_context(accept_downloads=True)
                         _attach_download_handler(context, inst, downloads_dir)
                         _attach_close_watcher(context, inst)
                         _attach_close_watcher(browser, inst)
-                        page = context.new_page()
+                        page = await context.new_page()
                 except Exception as e:
                     print(f"[camoforge] 初始页/下载处理器失败: {e}", file=sys.stderr)
                 try:
@@ -154,77 +184,75 @@ class Manager:
                 # inst.pid 是 node 驱动；真实浏览器主进程是其直接子进程。
                 # 关窗/崩溃检测以主进程为准（驱动在浏览器死后仍可能存活）。
                 if os.name == "nt" and inst.pid:
-                    exe_name = Path(kw["executable_path"]).name if kw.get("executable_path") else "camoufox.exe"
+                    exe_name = (
+                        Path(kw["executable_path"]).name
+                        if kw.get("executable_path")
+                        else "camoufox.exe"
+                    )
                     for _ in range(20):
                         inst.browser_pid = _find_browser_pid(inst.pid, exe_name)
                         if inst.browser_pid:
                             break
-                        time.sleep(0.25)
+                        await asyncio.sleep(0.25)
                 if page is not None and shortcut_page:
                     try:
-                        page.goto(shortcut_page, wait_until="domcontentloaded", timeout=15_000)
+                        await page.goto(
+                            shortcut_page,
+                            wait_until="domcontentloaded",
+                            timeout=15_000,
+                        )
                     except Exception:
                         pass
-                inst.ready.set()  # 启动完成，解除主线程等待
-                # 关窗检测：headed 模式下见过窗口后又失去全部可见窗口（且进程仍在）
-                # = 用户关窗——camoufox 进程树关窗后会无窗口常驻，disconnected 不会发。
+                inst.ready.set()
                 window_seen = False
                 windowless_since: Optional[float] = None
-                last_watch = 0.0
-                # 命令循环（同线程内操作 sync playwright 对象）。下载落盘任务也走这里，
-                # 保证 save_as 不在事件回调里调用。空闲时泵调度器，否则用户点击下载
-                # 时事件永远交不到 Python；泵的同时也让 disconnected/close 事件送达。
-                while True:
-                    if inst.browser_gone.is_set():
-                        break
-                    now = time.monotonic()
-                    if now - last_watch >= 0.5:
-                        last_watch = now
-                        watch_pid = inst.browser_pid or inst.pid
-                        if watch_pid is not None and not _pid_alive(watch_pid):
-                            with inst.lock:
-                                if not inst.stop_requested and inst.exit_reason is None:
-                                    inst.exit_reason = "浏览器已退出（窗口被关闭或进程结束）"
-                            break
-                        if (
-                            os.name == "nt"
-                            and not inst.headless
-                            and inst.browser_pid is not None
-                        ):
-                            if _tree_has_visible_window(inst.browser_pid):
-                                window_seen = True
-                                windowless_since = None
-                            elif window_seen:
-                                windowless_since = windowless_since or now
-                                if now - windowless_since >= 1.0:
-                                    with inst.lock:
-                                        if not inst.stop_requested and inst.exit_reason is None:
-                                            inst.exit_reason = "浏览器窗口已关闭"
-                                    break
+                # Camoufox 关窗后可能常驻且不发关闭事件，需低频检查进程与窗口。
+                while not stop_event.is_set():
                     try:
-                        task = inst.q.get(timeout=0.05)
-                    except queue.Empty:
-                        _pump_playwright(browser)
+                        await asyncio.wait_for(stop_event.wait(), timeout=2.0)
                         continue
-                    if task is None:
-                        with inst.lock:
-                            inst.stop_requested = True
+                    except asyncio.TimeoutError:
+                        pass
+                    now = time.monotonic()
+                    watch_pid = inst.browser_pid or inst.pid
+                    if watch_pid is not None and not await asyncio.to_thread(
+                        _pid_alive, watch_pid
+                    ):
+                        inst.notify_exit("浏览器已退出（窗口被关闭或进程结束）")
                         break
-                    try:
-                        task(browser)
-                    except Exception as e:
-                        print(f"[camoforge] 实例任务失败: {e}", file=sys.stderr)
-            except Exception as e:  # 启动失败或运行期异常
+                    if (
+                        os.name == "nt"
+                        and not inst.headless
+                        and inst.browser_pid is not None
+                    ):
+                        visible = await asyncio.to_thread(
+                            _tree_has_visible_window, inst.browser_pid
+                        )
+                        if visible:
+                            window_seen = True
+                            windowless_since = None
+                        elif window_seen:
+                            windowless_since = windowless_since or now
+                            if now - windowless_since >= 1.0:
+                                inst.notify_exit("浏览器窗口已关闭")
+                                break
+            except Exception as e:
                 reason = f"{type(e).__name__}: {e}"
                 with inst.lock:
                     inst.exit_reason = reason
                     inst.alive = False
                 traceback.print_exc(file=sys.stderr)
-                inst.ready.set()  # 若主线程还在等启动，解除阻塞
+                inst.ready.set()
             finally:
-                if browser is not None:
+                inst.accept_downloads = False
+                tasks = list(inst.download_tasks)
+                for task in tasks:
+                    task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                if cm is not None:
                     try:
-                        browser.close()
+                        await cm.__aexit__(None, None, None)
                     except Exception:
                         pass
                 with inst.lock:
@@ -232,15 +260,21 @@ class Manager:
                 with self.big_lock:
                     self.instances.pop(inst.profile_id, None)
                 if launched:
-                    # 先等 launch 响应发出再发 instance_exited：浏览器「刚启动就退出」时
-                    # 事件若先于响应到达 Rust 端，UI 先 remove 后 insert，留下永远清不掉
-                    # 的幽灵运行条目。正常情况响应早已发出，wait 立即返回。
+                    # 保证退出事件晚于 launch 响应，避免 Rust 端先 remove 后 insert。
                     inst.response_sent.wait(timeout=2.0)
                     self.emit("instance_exited", {"profile_id": inst.profile_id,
                                                   "reason": inst.exit_reason or "stopped",
                                                   "started": True})
 
-        inst.thread = threading.Thread(target=run, args=(inst,), daemon=True, name=f"camoforge-{pid[:8]}")
+        def run(inst: Instance) -> None:
+            asyncio.run(run_async(inst))
+
+        inst.thread = threading.Thread(
+            target=run,
+            args=(inst,),
+            daemon=True,
+            name=f"camoforge-{pid[:8]}",
+        )
         inst.thread.start()
 
         # 等待启动完成或失败（最长 180s：首次可能要解压浏览器）
@@ -248,7 +282,7 @@ class Manager:
             with inst.lock:
                 inst.exit_reason = "launch timeout (180s)"
                 inst.alive = False
-            inst.q.put(None)  # 让 run 线程退出命令循环
+            inst.request_stop()
             raise RuntimeError("launch timeout after 180s")
         with inst.lock:
             if not inst.alive and inst.exit_reason:
@@ -276,7 +310,7 @@ class Manager:
             inst = self.instances.get(profile_id)
         if not inst:
             return {"profile_id": profile_id, "stopped": False, "reason": "not running"}
-        inst.submit(None)  # 触发 run 循环退出 → with Camoufox 退出 → 浏览器关闭
+        inst.request_stop()
         inst.thread.join(timeout=30)
         if inst.thread.is_alive():
             # 浏览器未能及时关闭（卡死 / 下载占用等）：如实上报，UI 才能恢复运行态。

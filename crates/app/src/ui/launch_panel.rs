@@ -35,6 +35,7 @@ fn apply_field_text(
     match result {
         Ok(()) => {
             state.profile.field_errors.remove(error_key);
+            state.schedule_persist_current(cx);
         }
         Err(message) => {
             state
@@ -43,7 +44,6 @@ fn apply_field_text(
                 .insert(error_key.to_string(), message);
         }
     }
-    state.persist_current();
     cx.notify();
 }
 

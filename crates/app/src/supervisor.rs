@@ -53,7 +53,7 @@ struct Shared {
     log_sink: LogSink,
     child: Mutex<Option<Child>>,
     pending: Mutex<HashMap<String, (String, std::sync::mpsc::Sender<Response>)>>,
-    events_tx: std::sync::mpsc::Sender<SupervisorEvent>,
+    events_tx: async_channel::Sender<SupervisorEvent>,
     next_id: AtomicU64,
     restarts: Mutex<u32>,
     shutting_down: AtomicBool,
@@ -65,8 +65,8 @@ impl WorkerSupervisor {
         worker_script: PathBuf,
         data_dir: PathBuf,
         log_sink: LogSink,
-    ) -> (Self, mpsc::Receiver<SupervisorEvent>) {
-        let (tx, rx) = mpsc::channel();
+    ) -> (Self, async_channel::Receiver<SupervisorEvent>) {
+        let (tx, rx) = async_channel::unbounded();
         let sup = Self {
             state: Arc::new(Shared {
                 python,
@@ -205,7 +205,11 @@ impl WorkerSupervisor {
             },
             _ => return,
         };
-        let _ = shared.events_tx.send(event);
+        Self::emit(shared, event);
+    }
+
+    fn emit(shared: &Shared, event: SupervisorEvent) {
+        let _ = shared.events_tx.send_blocking(event);
     }
 
     fn handle_worker_exit(shared: &Arc<Shared>) {
@@ -222,20 +226,16 @@ impl WorkerSupervisor {
             *restarts
         };
         if attempt > Self::MAX_RESTARTS {
-            let _ = shared.events_tx.send(SupervisorEvent::WorkerFailed {
-                reason: format!("worker 反复崩溃（{attempt} 次），已停止自动重启"),
-            });
+            let reason = format!("worker 反复崩溃（{attempt} 次），已停止自动重启");
+            Self::emit(shared, SupervisorEvent::WorkerFailed { reason });
             return;
         }
 
-        let _ = shared
-            .events_tx
-            .send(SupervisorEvent::WorkerRestarted { attempt });
+        Self::emit(shared, SupervisorEvent::WorkerRestarted { attempt });
         std::thread::sleep(Duration::from_secs(1u64 << (attempt - 1)));
         if let Err(error) = Self::spawn_worker(shared) {
-            let _ = shared.events_tx.send(SupervisorEvent::WorkerFailed {
-                reason: format!("worker 重启失败: {error:#}"),
-            });
+            let reason = format!("worker 重启失败: {error:#}");
+            Self::emit(shared, SupervisorEvent::WorkerFailed { reason });
         }
     }
 
