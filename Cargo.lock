@@ -846,6 +846,7 @@ name = "camoforge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "camoforge-protocol",
  "embed-resource 2.5.2",
  "gpui",

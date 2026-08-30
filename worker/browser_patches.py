@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -173,6 +174,21 @@ def _font_has_svg_emoji(path: Path) -> bool:
         return False
 
 
+@lru_cache(maxsize=8)
+def _cached_font_has_svg_emoji(path: str, _size: int, _mtime_ns: int) -> bool:
+    return _font_has_svg_emoji(Path(path))
+
+
+def _validated_svg_emoji(path: Path) -> bool:
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    return _cached_font_has_svg_emoji(
+        str(path.resolve()), stat.st_size, stat.st_mtime_ns
+    )
+
+
 def _restore_font_bounds(font: Any) -> None:
     head = font["head"]
     hhea = font["hhea"]
@@ -284,14 +300,14 @@ def _ensure_macos_emoji_font(executable_path: Optional[str]) -> None:
     pending = destination.with_name(f"{destination.name}.pending")
     source = browser_dir / _MACOS_EMOJI_REPAIR_DIR / _MACOS_EMOJI_SOURCE
     try:
-        if _font_has_svg_emoji(destination):
+        if _validated_svg_emoji(destination):
             pending.unlink(missing_ok=True)
             return
         if not destination.exists():
             print(f"[camoforge] Apple emoji 修复跳过：{destination} 不存在", file=sys.stderr)
             return
 
-        if _font_has_svg_emoji(pending):
+        if _validated_svg_emoji(pending):
             os.replace(pending, destination)
             print(f"[camoforge] 已启用 Windows 兼容的 Apple Color Emoji: {destination}", file=sys.stderr)
             return
@@ -305,7 +321,7 @@ def _ensure_macos_emoji_font(executable_path: Optional[str]) -> None:
 
         pending.unlink(missing_ok=True)
         _convert_apple_emoji_to_svg(source, pending)
-        if not _font_has_svg_emoji(pending):
+        if not _validated_svg_emoji(pending):
             raise RuntimeError("转换结果校验失败")
         os.replace(pending, destination)
         print(f"[camoforge] 已启用 Windows 兼容的 Apple Color Emoji: {destination}", file=sys.stderr)

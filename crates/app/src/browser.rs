@@ -8,10 +8,9 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::io::{BufWriter, Read, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
 
 const RELEASES_API: &str = "https://api.github.com/repos/daijro/camoufox/releases?per_page=100";
-/// 进度节流：变化 ≥1MB 才发一条，避免 200ms 轮询渠道被刷爆。
+/// 进度节流：变化 ≥1MB 才发一条，避免无意义的高频 UI 更新。
 const PROGRESS_CHUNK: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -160,14 +159,16 @@ pub fn fetch_releases() -> Result<Vec<Release>> {
     Ok(out)
 }
 
-/// 清理下载中断残留的 `.part-*` 临时目录。只在启动时调用：下载进行中调用
-/// 会删掉活跃下载的临时目录。
+/// 清理旧进程遗留的 `.part-*` 目录，保留当前进程正在使用的目录。
 pub fn cleanup_part_dirs(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
+    let active_suffix = format!("-{}", std::process::id());
     for e in entries.filter_map(|e| e.ok()) {
-        if e.file_name().to_string_lossy().starts_with(".part-") {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".part-") && !name.ends_with(&active_suffix) {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
@@ -190,7 +191,11 @@ pub fn scan_installed(root: &Path) -> Vec<String> {
 
 /// 下载并安装一个 release 到 `<root>/<full>/`；失败时已清理临时目录，
 /// 不产生半成品版本目录。
-pub fn download_release(rel: &Release, root: &Path, tx: &Sender<DownloadMsg>) -> Result<()> {
+pub fn download_release(
+    rel: &Release,
+    root: &Path,
+    tx: &async_channel::Sender<DownloadMsg>,
+) -> Result<()> {
     if rel.asset_url.is_empty() {
         return Err(anyhow!("该版本缺少下载地址"));
     }
@@ -200,7 +205,7 @@ pub fn download_release(rel: &Release, root: &Path, tx: &Sender<DownloadMsg>) ->
     }
     std::fs::create_dir_all(root).with_context(|| format!("创建目录 {}", root.display()))?;
 
-    let part = root.join(format!(".part-{}", rel.full));
+    let part = root.join(format!(".part-{}-{}", rel.full, std::process::id()));
     let _ = std::fs::remove_dir_all(&part);
     std::fs::create_dir_all(&part).with_context(|| format!("创建临时目录 {}", part.display()))?;
     let result = download_and_extract(rel, root, &part, tx);
@@ -214,7 +219,7 @@ fn download_and_extract(
     rel: &Release,
     root: &Path,
     part: &Path,
-    tx: &Sender<DownloadMsg>,
+    tx: &async_channel::Sender<DownloadMsg>,
 ) -> Result<()> {
     let agent = crate::net::http_agent()?;
     let resp = agent
@@ -246,7 +251,7 @@ fn download_and_extract(
             .with_context(|| format!("写入 {}", zip_path.display()))?;
         downloaded += n as u64;
         if downloaded - last_sent >= PROGRESS_CHUNK {
-            let _ = tx.send(DownloadMsg::Progress {
+            let _ = tx.send_blocking(DownloadMsg::Progress {
                 full: rel.full.clone(),
                 downloaded,
                 total,
@@ -256,7 +261,7 @@ fn download_and_extract(
     }
     writer.flush().context("flush 下载文件")?;
     drop(writer);
-    let _ = tx.send(DownloadMsg::Progress {
+    let _ = tx.send_blocking(DownloadMsg::Progress {
         full: rel.full.clone(),
         downloaded,
         total,
@@ -264,7 +269,7 @@ fn download_and_extract(
 
     let unpacked = part.join("unpacked");
     std::fs::create_dir_all(&unpacked).context("创建解压目录")?;
-    let _ = tx.send(DownloadMsg::Extracting {
+    let _ = tx.send_blocking(DownloadMsg::Extracting {
         full: rel.full.clone(),
     });
     extract_zip(&zip_path, &unpacked)?;
@@ -423,6 +428,8 @@ mod tests {
         let root = tmp.path();
         std::fs::create_dir_all(root.join(".part-1.0-beta.1").join("unpacked")).unwrap();
         std::fs::write(root.join(".part-1.0-beta.1").join("camoufox.zip"), b"z").unwrap();
+        let active = root.join(format!(".part-active-{}", std::process::id()));
+        std::fs::create_dir_all(&active).unwrap();
         let keep = root.join("1.0-beta.1");
         std::fs::create_dir_all(&keep).unwrap();
         std::fs::write(keep.join(exe_name()), b"exe").unwrap();
@@ -430,6 +437,7 @@ mod tests {
         cleanup_part_dirs(root);
 
         assert!(!root.join(".part-1.0-beta.1").exists());
+        assert!(active.exists());
         assert!(keep.join(exe_name()).exists());
     }
 

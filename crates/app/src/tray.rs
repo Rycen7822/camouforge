@@ -3,13 +3,11 @@
 //! 实现要点：
 //! - gpui 没有托盘 / hide / show API，托盘图标用 Win32 `Shell_NotifyIconW` 自建。
 //! - 图标挂在一个隐藏窗口上；该窗口创建在主线程（gpui 的 GetMessageW 循环会把线程上
-//!   所有窗口的消息派发到各自 WndProc），双击 / 右键菜单事件经 mpsc 通道回传 main.rs
-//!   的后台任务消费（跨线程只传事件，不碰 gpui 对象）。
+//!   所有窗口的消息派发到各自 WndProc），双击 / 右键菜单事件经异步通道回传 GPUI。
 //! - 主窗口 HWND 在窗口创建时经 [`register_main_hwnd`] 记录；隐藏/恢复直接调
 //!   `ShowWindow`（隐藏窗口不会触发 gpui 的「窗口关闭 → 退出」，进程保持常驻）。
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use gpui::Global;
 use windows::core::PCWSTR;
@@ -37,7 +35,7 @@ pub enum TrayEvent {
     Quit,
 }
 
-static TRAY_TX: OnceLock<Sender<TrayEvent>> = OnceLock::new();
+static TRAY_TX: OnceLock<async_channel::Sender<TrayEvent>> = OnceLock::new();
 
 /// HWND 的整数形式：`*mut c_void` 不是 Send/Sync 不能进 static，isize 无损保存。
 #[derive(Clone, Copy)]
@@ -50,7 +48,7 @@ impl Global for TrayGlobal {}
 
 pub struct Tray {
     hwnd: HWND,
-    events: Arc<Mutex<Receiver<TrayEvent>>>,
+    events: async_channel::Receiver<TrayEvent>,
 }
 
 impl Tray {
@@ -130,15 +128,13 @@ impl Tray {
             return None;
         }
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = async_channel::unbounded();
         let _ = TRAY_TX.set(tx);
-        Some(Arc::new(Tray {
-            hwnd,
-            events: Arc::new(Mutex::new(rx)),
-        }))
+        Some(Arc::new(Tray { hwnd, events: rx }))
     }
 
     pub fn shutdown(&self) {
+        self.events.close();
         unsafe {
             let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
             nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -149,7 +145,7 @@ impl Tray {
         }
     }
 
-    pub fn events(&self) -> Arc<Mutex<Receiver<TrayEvent>>> {
+    pub fn events(&self) -> async_channel::Receiver<TrayEvent> {
         self.events.clone()
     }
 }
@@ -212,10 +208,10 @@ fn show_tray_menu(hwnd: HWND) {
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         match cmd.0 as usize {
             MENU_SHOW => {
-                let _ = tx.send(TrayEvent::Show);
+                let _ = tx.try_send(TrayEvent::Show);
             }
             MENU_QUIT => {
-                let _ = tx.send(TrayEvent::Quit);
+                let _ = tx.try_send(TrayEvent::Quit);
             }
             _ => {}
         }
@@ -233,7 +229,7 @@ unsafe extern "system" fn tray_wnd_proc(
         match lparam.0 as u32 {
             WM_LBUTTONDBLCLK => {
                 if let Some(tx) = TRAY_TX.get() {
-                    let _ = tx.send(TrayEvent::Show);
+                    let _ = tx.try_send(TrayEvent::Show);
                 }
             }
             WM_RBUTTONUP => show_tray_menu(hwnd),

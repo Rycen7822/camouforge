@@ -29,7 +29,24 @@ actions!(
 struct MainWindow(gpui::AnyWindowHandle);
 impl Global for MainWindow {}
 
+struct MainState(gpui::WeakEntity<state::AppState>);
+impl Global for MainState {}
+
+#[cfg(windows)]
+fn restore_main_window(cx: &mut AsyncApp) {
+    tray::show_main_window();
+    cx.update(|cx| {
+        if let Some(MainWindow(handle)) = cx.try_global::<MainWindow>() {
+            let _ = (*handle).update(cx, |_, window, _| window.activate_window());
+        }
+    });
+}
+
 fn shutdown_all(supervisor: &supervisor::WorkerSupervisor, cx: &mut App) {
+    let state = cx.try_global::<MainState>().map(|state| state.0.clone());
+    if let Some(state) = state {
+        let _ = state.update(cx, |state, _cx| state.flush_pending_profile_save());
+    }
     supervisor.shutdown();
     #[cfg(windows)]
     if let Some(tray) = cx.try_global::<tray::TrayGlobal>() {
@@ -71,7 +88,6 @@ pub fn run(
         );
         let sup = Arc::new(sup);
 
-        let rx = Arc::new(std::sync::Mutex::new(rx));
         let sup_for_exit = sup.clone();
         #[cfg(windows)]
         let sup_for_close = sup.clone();
@@ -160,8 +176,7 @@ pub fn run(
                             window,
                             cx,
                         );
-                        st.worker.supervisor = Some(sup.clone());
-                        st.worker.event_rx = Some(rx.clone());
+                        st.attach_supervisor(sup.clone(), rx, cx);
                         if st.profile.selected.is_none() {
                             if let Some(first) = st.profile.profiles.first() {
                                 st.profile.selected = Some(first.id.clone());
@@ -171,6 +186,7 @@ pub fn run(
                     });
 
                     let weak = view.downgrade();
+                    cx.set_global(MainState(weak.clone()));
 
                     let weak_env = weak.clone();
                     cx.spawn(async move |cx| {
@@ -214,35 +230,25 @@ pub fn run(
                         let _ =
                             weak_gen.update(cx, |state, cx| state.generate_fingerprint_current(cx));
                     });
-                    cx.spawn(async move |cx| loop {
-                        // 200ms 轮询限制快捷方式自动启动等待，同时避免 UI 忙轮询。
-                        cx.background_executor()
-                            .timer(std::time::Duration::from_millis(200))
-                            .await;
-
-                        // 单实例：处理其他实例转交的启动请求（再次双击 exe/快捷方式 → 激活窗口/自动启动）
-                        #[cfg(windows)]
-                        {
-                            let reqs = single::take_launch_requests(&dir);
-                            for req in reqs {
-                                tray::show_main_window();
-                                cx.update(|cx| {
-                                    if let Some(MainWindow(h)) = cx.try_global::<MainWindow>() {
-                                        let _ = (*h).update(cx, |_, w, _| w.activate_window());
+                    #[cfg(windows)]
+                    {
+                        let requests = single::launch_request_events(dir.clone());
+                        let weak_requests = weak.clone();
+                        cx.spawn(async move |cx| {
+                            while let Ok(request) = requests.recv().await {
+                                restore_main_window(cx);
+                                if let Some(id) = request {
+                                    if weak_requests
+                                        .update(cx, |state, cx| state.launch_profile(&id, cx))
+                                        .is_err()
+                                    {
+                                        break;
                                     }
-                                });
-                                if let Some(id) = req {
-                                    let _ =
-                                        weak.update(cx, |state, cx| state.launch_profile(&id, cx));
                                 }
                             }
-                        }
-
-                        let _ = weak.update(cx, |state, cx| {
-                            state.dirty_tick(cx);
-                        });
-                    })
-                    .detach();
+                        })
+                        .detach();
+                    }
 
                     cx.new(|cx| Root::new(view, window, cx))
                 })
@@ -266,27 +272,16 @@ pub fn run(
                     cx.update(|cx| cx.set_global(tray::TrayGlobal(tray.clone())));
                     let events = tray.events();
                     let sup_tray = sup_for_tray.clone();
-                    cx.spawn(async move |cx| loop {
-                        let evt = cx
-                            .background_executor()
-                            .spawn({
-                                let events = events.clone();
-                                async move { events.lock().unwrap().recv().ok() }
-                            })
-                            .await;
-                        let Some(evt) = evt else { break };
-                        match evt {
-                            tray::TrayEvent::Show => {
-                                tray::show_main_window();
-                                cx.update(|cx| {
-                                    if let Some(MainWindow(h)) = cx.try_global::<MainWindow>() {
-                                        let _ = (*h).update(cx, |_, w, _| w.activate_window());
-                                    }
-                                });
-                            }
-                            tray::TrayEvent::Quit => {
-                                cx.update(|cx| shutdown_all(&sup_tray, cx));
-                                break;
+                    cx.spawn(async move |cx| {
+                        while let Ok(evt) = events.recv().await {
+                            match evt {
+                                tray::TrayEvent::Show => {
+                                    restore_main_window(cx);
+                                }
+                                tray::TrayEvent::Quit => {
+                                    cx.update(|cx| shutdown_all(&sup_tray, cx));
+                                    break;
+                                }
                             }
                         }
                     })

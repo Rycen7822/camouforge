@@ -7,13 +7,22 @@
 若 venv 装有 pytest，也可直接 `python -m pytest tests/test_worker_unit.py`。
 """
 
+import asyncio
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-WORKER = Path(__file__).resolve().parent.parent / "worker" / "camoforge_worker.py"
+ROOT = Path(__file__).resolve().parent.parent
+TEST_TEMP = ROOT / "temp" / "worker-unit"
+TEST_TEMP.mkdir(parents=True, exist_ok=True)
+os.environ["TMP"] = os.environ["TEMP"] = str(TEST_TEMP)
+tempfile.tempdir = str(TEST_TEMP)
+_TEST_DATA = tempfile.TemporaryDirectory(prefix="data-", dir=TEST_TEMP)
+os.environ["CAMOFORGE_DATA_DIR"] = _TEST_DATA.name
+WORKER = ROOT / "worker" / "camoforge_worker.py"
 
 _spec = importlib.util.spec_from_file_location("camoforge_worker", WORKER)
 w = importlib.util.module_from_spec(_spec)
@@ -233,11 +242,32 @@ def test_emoji_repair_source_is_outside_bundled_fonts_directory():
     assert source.parent != browser_dir / "fonts"
 
 
+def test_svg_emoji_validation_is_cached_by_file_metadata():
+    with tempfile.TemporaryDirectory() as tmp:
+        font = Path(tmp) / "AppleColorEmoji.ttf"
+        font.write_bytes(b"first")
+        calls = []
+        original = browser_patches._font_has_svg_emoji
+        browser_patches._cached_font_has_svg_emoji.cache_clear()
+        browser_patches._font_has_svg_emoji = lambda path: calls.append(path) or True
+        try:
+            assert browser_patches._validated_svg_emoji(font)
+            assert browser_patches._validated_svg_emoji(font)
+            assert len(calls) == 1
+
+            font.write_bytes(b"second-version")
+            assert browser_patches._validated_svg_emoji(font)
+            assert len(calls) == 2
+        finally:
+            browser_patches._font_has_svg_emoji = original
+            browser_patches._cached_font_has_svg_emoji.cache_clear()
+
+
 class FakeDownload:
     def __init__(self, name):
         self.suggested_filename = name
 
-    def save_as(self, path):
+    async def save_as(self, path):
         self.saved = str(path)
 
 
@@ -245,7 +275,7 @@ def _save_and_return(name, tmp):
     d = Path(tmp) / "dl"
     d.mkdir(exist_ok=True)
     dl = FakeDownload(name)
-    w._save_download(dl, d)
+    asyncio.run(w._save_download(dl, d))
     return Path(dl.saved), d
 
 
@@ -274,6 +304,51 @@ def test_save_download_empty_name_falls_back():
         saved, d = _save_and_return("   ", tmp)
         assert saved == d / "download"
 
+
+def test_concurrent_downloads_reserve_unique_names():
+    async def run(tmp):
+        directory = Path(tmp)
+        lock = asyncio.Lock()
+        reserved = set()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingDownload(FakeDownload):
+            async def save_as(self, path):
+                self.saved = str(path)
+                started.set()
+                await release.wait()
+
+        first = BlockingDownload("report.pdf")
+        second = FakeDownload("report.pdf")
+        first_task = asyncio.create_task(
+            w._save_download(first, directory, lock, reserved)
+        )
+        await started.wait()
+        await w._save_download(second, directory, lock, reserved)
+        release.set()
+        await first_task
+        assert {Path(first.saved).name, Path(second.saved).name} == {
+            "report.pdf",
+            "report (1).pdf",
+        }
+        assert not reserved
+
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(run(tmp))
+
+
+def test_instance_stop_is_safe_before_and_after_loop_lifecycle():
+    inst = w.Instance(make_profile(), False, None)
+    inst.request_stop()
+
+    async def run():
+        stop_event = inst.bind_loop()
+        await asyncio.wait_for(stop_event.wait(), timeout=1)
+
+    asyncio.run(run())
+    inst.wake()
+    assert inst.stop_requested
 
 
 def test_stop_all_aggregates_partial_failures():
