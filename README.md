@@ -9,6 +9,17 @@ configuration through a structured UI.
 
 ![CamouForge interface](docs/images/camouforge-ui.png)
 
+## Set it up with an AI agent
+
+Copy the prompt below to your coding agent (ZCode, Claude Code, …) — replace the path with
+your CamouForge folder. The agent will follow [AGENTS.md](AGENTS.md) to help you download,
+deploy, and configure CamouForge:
+
+```text
+Read D:\path\to\camouforge\AGENTS.md and strictly follow its rules. Help me download and
+set up CamouForge, then use COOKBOOK.md to guide me through the fingerprint configuration.
+```
+
 ## Highlights
 
 - Manage multiple browser identities and their persistent data independently.
@@ -105,6 +116,8 @@ camouforge/
 ├─ worker/                     # Python Camoufox worker
 ├─ tests/                      # worker unit and integration tests
 ├─ scripts/package-portable.ps1
+├─ examples/example-profile.json # ready-to-use sample identity (Tokyo / macOS fingerprint)
+├─ AGENTS.md                   # rules for AI agents assisting setup & configuration
 ├─ COOKBOOK.md                 # configuration reference for contributors
 ├─ pyproject.toml / uv.lock    # pinned worker environment
 └─ Cargo.toml / Cargo.lock     # Rust workspace

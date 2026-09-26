@@ -8,6 +8,15 @@ Python worker，将 Camoufox 启动参数与指纹配置整理为结构化图形
 
 ![CamouForge 界面](docs/images/camouforge-ui.png)
 
+## 让 AI 助手帮你部署
+
+把下面这行 prompt 复制给你的编程 agent（ZCode / Claude Code 等），并把路径替换为你的
+CamouForge 目录。agent 会按 [AGENTS.md](AGENTS.md) 的纪律帮你下载部署并指导配置：
+
+```text
+请阅读 D:\path\to\camouforge\AGENTS.md 并严格遵循其中的纪律；帮我下载并部署 CamouForge，再按 COOKBOOK.md 指导我完成浏览器身份配置。
+```
+
 ## 主要功能
 
 - 管理多个相互独立的浏览器身份及其持久化数据。
@@ -99,6 +108,8 @@ camouforge/
 ├─ worker/                     # Python Camoufox worker
 ├─ tests/                      # worker 单元测试与集成测试
 ├─ scripts/package-portable.ps1
+├─ examples/example-profile.json # 开箱即用的示例身份（东京 / macOS 指纹）
+├─ AGENTS.md                   # AI agent 协助部署与配置的纪律
 ├─ COOKBOOK.md                 # 面向贡献者的配置参考
 ├─ pyproject.toml / uv.lock    # 锁定的 worker 环境
 └─ Cargo.toml / Cargo.lock     # Rust workspace
