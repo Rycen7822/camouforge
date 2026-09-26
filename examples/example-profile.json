@@ -1,0 +1,312 @@
+{
+  "id": "00000000-0000-0000-0000-000000000001",
+  "name": "示例：东京 macOS",
+  "notes": "",
+  "created_at": 1787520000,
+  "updated_at": 1787874985,
+  "launch": {
+    "os": [
+      "macos"
+    ],
+    "humanize": {
+      "mode": "on"
+    },
+    "headless": "headed",
+    "color_scheme": "dark",
+    "persistent_context": true,
+    "user_data_dir": null,
+    "downloads_dir": "D:\\Downloads",
+    "shortcuts": [
+      {
+        "name": "chatgpt",
+        "url": "chatgpt.com"
+      },
+      {
+        "name": "ippure",
+        "url": "ippure.com"
+      },
+      {
+        "name": "status.openai",
+        "url": "https://status.openai.com/"
+      }
+    ],
+    "block_images": null,
+    "block_webrtc": true,
+    "block_webgl": null,
+    "disable_coop": null,
+    "main_world_eval": null,
+    "enable_cache": null,
+    "debug": null,
+    "i_know_what_im_doing": null,
+    "webgl_config": null,
+    "fingerprint": {
+      "screen": {
+        "availHeight": 1041,
+        "availWidth": 1728,
+        "availTop": 0,
+        "availLeft": 0,
+        "colorDepth": 30,
+        "height": 1117,
+        "pixelDepth": 30,
+        "width": 1728,
+        "devicePixelRatio": 2,
+        "pageXOffset": 0,
+        "pageYOffset": 0,
+        "innerHeight": 0,
+        "outerHeight": 1024,
+        "outerWidth": 1728,
+        "innerWidth": 0,
+        "screenX": 0,
+        "clientWidth": 0,
+        "clientHeight": 22,
+        "hasHDR": false
+      },
+      "navigator": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+        "userAgentData": null,
+        "doNotTrack": "1",
+        "appCodeName": "Mozilla",
+        "appName": "Netscape",
+        "appVersion": "5.0 (Macintosh)",
+        "oscpu": "Intel Mac OS X 10.15",
+        "webdriver": false,
+        "language": "ja-JP",
+        "languages": [
+          "ja-JP"
+        ],
+        "platform": "MacIntel",
+        "deviceMemory": null,
+        "hardwareConcurrency": 10,
+        "product": "Gecko",
+        "productSub": "20100101",
+        "vendor": null,
+        "vendorSub": null,
+        "maxTouchPoints": 0,
+        "extraProperties": {
+          "vendorFlavors": [],
+          "globalPrivacyControl": true,
+          "pdfViewerEnabled": true,
+          "installedApps": []
+        }
+      },
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ja-JP;q=1.0",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "navigate",
+        "Sec-Fetch-Mode": "same-site",
+        "Sec-Fetch-Site": "?1",
+        "Sec-Fetch-User": "document",
+        "Te": "trailers"
+      },
+      "videoCodecs": {
+        "ogg": "",
+        "h264": "probably",
+        "webm": "probably"
+      },
+      "audioCodecs": {
+        "ogg": "probably",
+        "mp3": "maybe",
+        "wav": "probably",
+        "m4a": "maybe",
+        "aac": "maybe"
+      },
+      "pluginsData": {
+        "plugins": [
+          {
+            "name": "PDF Viewer",
+            "description": "Portable Document Format",
+            "filename": "internal-pdf-viewer",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              },
+              {
+                "type": "text/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              }
+            ]
+          },
+          {
+            "name": "Chrome PDF Viewer",
+            "description": "Portable Document Format",
+            "filename": "internal-pdf-viewer",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              },
+              {
+                "type": "text/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              }
+            ]
+          },
+          {
+            "name": "Chromium PDF Viewer",
+            "description": "Portable Document Format",
+            "filename": "internal-pdf-viewer",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              },
+              {
+                "type": "text/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              }
+            ]
+          },
+          {
+            "name": "Microsoft Edge PDF Viewer",
+            "description": "Portable Document Format",
+            "filename": "internal-pdf-viewer",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              },
+              {
+                "type": "text/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              }
+            ]
+          },
+          {
+            "name": "WebKit built-in PDF",
+            "description": "Portable Document Format",
+            "filename": "internal-pdf-viewer",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              },
+              {
+                "type": "text/pdf",
+                "suffixes": "pdf",
+                "description": "Portable Document Format",
+                "enabledPlugin": "PDF Viewer"
+              }
+            ]
+          }
+        ],
+        "mimeTypes": [
+          "Portable Document Format~~application/pdf~~pdf",
+          "Portable Document Format~~text/pdf~~pdf"
+        ]
+      },
+      "battery": null,
+      "videoCard": {
+        "renderer": "Apple M1, or similar",
+        "vendor": "Apple"
+      },
+      "multimediaDevices": {
+        "speakers": [],
+        "micros": [],
+        "webcams": []
+      },
+      "fonts": [
+        "Arial Unicode MS",
+        "Gill Sans",
+        "Helvetica Neue",
+        "Menlo"
+      ],
+      "mockWebRTC": false,
+      "slim": false
+    },
+    "fingerprint_preset": null,
+    "ff_version": null,
+    "geoip": {
+      "mode": "off"
+    },
+    "geoip_db": null,
+    "proxy": {
+      "server": "http://localhost:18106",
+      "username": null,
+      "password": null,
+      "port": null
+    },
+    "locale": [
+      "ja-JP",
+      "en-US"
+    ],
+    "fonts": null,
+    "custom_fonts_only": null,
+    "addons": [],
+    "exclude_addons": [],
+    "screen": null,
+    "window": null,
+    "executable_path": null,
+    "browser": "official/152.0.4-beta.29",
+    "firefox_user_prefs": {
+      "browser.tabs.closeButtons": 2,
+      "gfx.webrender.compositor": true,
+      "gfx.webrender.compositor.force-enabled": true,
+      "gfx.webrender.enabled": true,
+      "gfx.webrender.force-enabled": true,
+      "gfx.webrender.software": false,
+      "layers.acceleration.force-enabled": true,
+      "media.hardware-video-decoding.enabled": true,
+      "media.hardware-video-decoding.force-enabled": true,
+      "network.dns.disableIPv6": true
+    },
+    "args": [],
+    "env": {},
+    "extra_launch_options": {}
+  },
+  "config": {
+    "AudioContext:maxChannelCount": 2,
+    "AudioContext:sampleRate": 48000,
+    "geolocation:accuracy": 10,
+    "geolocation:latitude": 35.6895,
+    "geolocation:longitude": 139.6917,
+    "locale:language": "en",
+    "locale:region": "JP",
+    "locale:script": "Jpan",
+    "mediaDevices:micros": 1,
+    "mediaDevices:speakers": 2,
+    "mediaDevices:webcams": 1,
+    "navigator.appCodeName": "Mozilla",
+    "navigator.appVersion": "5.0 (Macintosh)",
+    "navigator.cookieEnabled": true,
+    "navigator.hardwareConcurrency": 24,
+    "navigator.language": "en-US",
+    "navigator.languages": [
+      "en-US",
+      "ja-JP"
+    ],
+    "navigator.oscpu": "Intel Mac OS X 10.15",
+    "navigator.platform": "MacIntel",
+    "showcursor": false,
+    "timezone": "Asia/Tokyo",
+    "webGl2:parameters:blockIfNotDefined": true,
+    "webGl:parameters:blockIfNotDefined": true,
+    "webGl:renderer": "Apple M1, or similar",
+    "webGl:vendor": "Apple",
+    "window.innerHeight": 900,
+    "window.innerWidth": 1440,
+    "window.outerHeight": 900,
+    "window.outerWidth": 1440
+  }
+}

@@ -4,7 +4,7 @@
 >
 > 适用版本：camoufox SDK 0.5.5（browserforge 1.2.4 / playwright 1.60）、CamouForge 当前代码（registry 91 字段）。camoufox 升级后本文件需重新核对（尤其是 §4 properties.json 与 §3 数据源路径）。
 >
-> 关联材料：`CAMOUFOX_FIXED_FIELDS.md`（临时核对草稿，记录了下拉改造过程与值池挖掘细节）、`HANDOFF.md`、`note.md`（开发过程笔记）。
+> 配置修改的工作纪律与项目约束见 `AGENTS.md`。
 
 ---
 
@@ -64,7 +64,7 @@ NewBrowser → NewContext（addInitScript 注入指纹，脚本自销毁）
 | SDK 数据文件 | `.venv/Lib/site-packages/camoufox/` | `fonts.json`（win 107 / mac 574 / lin 134）、`voices.json`（mac 190 / win 53 / lin 131）、`webgl/webgl_data.db`（13 vendor × 33 组合）、`territoryInfo.xml`（CLDR 258 地区 / 710 语言）、`fingerprint-presets.json` / `-v150.json`（实采真实指纹池）、`browserforge.yml`（BrowserForge→config 键映射） |
 | 官方文档 | camoufox.com/fingerprint（14 个子页，按分类的散文文档）；GitHub daijro/camoufox README | 只列分类（Navigator/Cursor/Fonts/Screen/Window/Document/HTTP Headers/Geolocation&Intl/WebRTC IP/WebGL/Media&Audio/Voices/Addons/Miscellaneous），**无机器可读键清单**。README 明确：未设置的 config 由 BrowserForge 自动填充 |
 | CLI | `.venv/Scripts/python.exe -m camoufox --help` 及各子命令 | 版本管理 + 枚举（§10） |
-| BrowserForge 贝叶斯网络 | `.venv/Lib/site-packages/apify_fingerprint_datapoints/`（v0.15.0） | 默认指纹路径的真正值池（25 节点：UA 235 条、hardwareConcurrency 39 值、maxTouchPoints 12 值、screen 4569 组合…），详见 CAMOUFOX_FIXED_FIELDS.md §9 |
+| BrowserForge 贝叶斯网络 | `.venv/Lib/site-packages/apify_fingerprint_datapoints/`（v0.15.0） | 默认指纹路径的真正值池（25 节点：UA 235 条、hardwareConcurrency 39 值、maxTouchPoints 12 值、screen 4569 组合…），（值池即随包贝叶斯网络数据点，直接查询该目录 JSON） |
 
 ### 2.1 一键导出当前浏览器版本的 properties.json
 
