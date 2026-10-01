@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
-from browser_patches import MACOS_EMOJI_FAMILY
+from browser_patches import MACOS_DEFAULT_FONTS, MACOS_EMOJI_FAMILY
 from sdk_bridge import (
     SDK,
     VALID_OS,
@@ -129,6 +131,10 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
         from camoufox.fingerprints import _generate_random_font_subset
 
         kw["fonts"] = _with_macos_emoji(_generate_random_font_subset("macos"))
+        for families in MACOS_DEFAULT_FONTS.values():
+            for family in families:
+                if family not in kw["fonts"]:
+                    kw["fonts"].append(family)
     if lo.get("custom_fonts_only") is not None:
         kw["custom_fonts_only"] = lo["custom_fonts_only"]
 
@@ -227,6 +233,26 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
     #   Manager.run 里对 browser.new_context(accept_downloads=True) 显式开启。
     if kw.get("persistent_context"):
         kw["accept_downloads"] = True
+
+    prefs = dict(kw.get("firefox_user_prefs") or {})
+    kw["firefox_user_prefs"] = prefs
+    if macos_target:
+        for script, families in MACOS_DEFAULT_FONTS.items():
+            for style, family in zip(("sans-serif", "serif", "monospace"), families):
+                prefs.setdefault(f"font.name.{style}.{script}", family)
+                prefs.setdefault(f"font.name-list.{style}.{script}", family)
+
+    navigator = (lo.get("fingerprint") or {}).get("navigator") or {}
+    locales = kw.get("locale") or navigator.get("languages") or navigator.get("language")
+    if locales:
+        if isinstance(locales, str):
+            locales = [locale.strip() for locale in locales.split(",")]
+        prefs.setdefault("intl.locale.requested", ",".join(locales))
+
+    # 156 reads startup-only prefs before Juggler applies non-persistent prefs.
+    if prefs:
+        kw["env"] = {**os.environ, **(kw.get("env") or {})}
+        kw["env"]["CAMOU_PREFS_1"] = json.dumps(prefs)
 
     return kw
 

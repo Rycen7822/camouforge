@@ -62,7 +62,7 @@
         "hasHDR": false
       },
       "navigator": {
-        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0",
         "userAgentData": null,
         "doNotTrack": "1",
         "appCodeName": "Mozilla",
@@ -90,7 +90,7 @@
         }
       },
       "headers": {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ja-JP;q=1.0",
         "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -258,7 +258,7 @@
     "screen": null,
     "window": null,
     "executable_path": null,
-    "browser": "official/152.0.4-beta.29",
+    "browser": "official/156.0.1-beta.33",
     "firefox_user_prefs": {
       "browser.tabs.closeButtons": 2,
       "gfx.webrender.compositor": true,
@@ -281,32 +281,12 @@
     "geolocation:accuracy": 10,
     "geolocation:latitude": 35.6895,
     "geolocation:longitude": 139.6917,
-    "locale:language": "en",
-    "locale:region": "JP",
-    "locale:script": "Jpan",
     "mediaDevices:micros": 1,
     "mediaDevices:speakers": 2,
     "mediaDevices:webcams": 1,
-    "navigator.appCodeName": "Mozilla",
-    "navigator.appVersion": "5.0 (Macintosh)",
-    "navigator.cookieEnabled": true,
-    "navigator.hardwareConcurrency": 24,
-    "navigator.language": "en-US",
-    "navigator.languages": [
-      "en-US",
-      "ja-JP"
-    ],
-    "navigator.oscpu": "Intel Mac OS X 10.15",
-    "navigator.platform": "MacIntel",
     "showcursor": false,
     "timezone": "Asia/Tokyo",
-    "webGl2:parameters:blockIfNotDefined": true,
-    "webGl:parameters:blockIfNotDefined": true,
     "webGl:renderer": "Apple M1, or similar",
-    "webGl:vendor": "Apple",
-    "window.innerHeight": 900,
-    "window.innerWidth": 1440,
-    "window.outerHeight": 900,
-    "window.outerWidth": 1440
+    "webGl:vendor": "Apple"
   }
 }

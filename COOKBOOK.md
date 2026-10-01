@@ -21,6 +21,27 @@
 
 ---
 
+### 0.1 Camoufox 156.0.1-beta.33 适配
+
+当前示例使用 156，Python SDK 仍固定为 0.5.5，以保留现有 BrowserForge 身份格式。
+下文 §4 的全表是 **152 的历史参考**，不是所有浏览器版本通用的键表；156 的
+`properties.json` 有 82 个键。修改配置必须以实际执行文件同目录的表为准。
+
+- 156 不再支持 `navigator.appCodeName/appName/product/productSub/languages/cookieEnabled/onLine`、
+  `screen.pageXOffset/pageYOffset`、`window.history.length/scrollMinX/scrollMinY/scrollMaxX/scrollMaxY`、
+  `document.body.*`、`battery:*`、`fonts:spacing_seed`、`canvas:seed/aaOffset/aaCapOffset`、
+  `webGl:parameters:blockIfNotDefined` / `webGl2:parameters:blockIfNotDefined` 等旧注入键。
+  SDK 自己仍可能生成部分旧键，156 会忽略；不要再把这些键写进身份的 `config`。
+- 固定指纹模式不重复保存 worker 会剥离的字段（§8.8）。`launch.locale` 是显式语言入口，
+  worker 同时设置启动时的 `intl.locale.requested`，避免新版 Intl 继承宿主语言。
+- macOS 默认网页字体由 worker 的 `MACOS_DEFAULT_FONTS` 设置：中文无衬线为苹方，
+  衬线为宋体。用户显式 `firefox_user_prefs` 优先；不要把 macOS 字体默认值全局写入
+  浏览器的 `camoufox.cfg`，否则会影响 Windows/Linux 身份。
+- worker 自动处理旧 TTF/CBDT 和新 TTC/sbix Apple emoji，保留原字形、字体名与字宽，
+  并补齐 Windows 字符映射（仅转换图片表不够），
+  原文件备份到浏览器的 `.camouforge-font-repair/`。不要把备份放在 `fonts/`，会遮蔽修复字体。
+  标签栏的“＋”按钮也由 worker 自动补齐。
+
 ## 1. 配置数据流（改配置前先看懂这张图）
 
 ```
@@ -35,7 +56,7 @@ Profile JSON：{ "id": "...", "name": "...", "launch": {...}, "config": {...} }
 worker/camoforge_worker.py
         │  Manager.launch() → translate_profile()：把 launch 语义枚举展开为 SDK 原生参数（§5.2）
         ▼
-camoufox.sync_api.Camoufox(**kw)
+camoufox.async_api.AsyncCamoufox(**kw)
         │  launch_options(config=..., os=..., headless=..., ...)
         ▼
 camoufox/utils.py::validate_config()   ← 对照浏览器版本的 properties.json 做类型校验
@@ -127,7 +148,7 @@ with open(get_path("properties.json"), encoding="utf-8") as f:
 
 ---
 
-## 4. properties.json 108 键全表（config 合法键面）
+## 4. properties.json 152 历史参考（156 差异见 §0.1）
 
 类型图例：`str` 字符串 · `uint` 无符号整数 · `int` 有符号整数 · `double` 浮点 · `bool` 布尔 · `array` 数组 · `dict` 对象。
 registry 控件图例：✅=已下拉/Switch · 文本=自由输入 · `—`=未登记（仅原始 JSON）。
