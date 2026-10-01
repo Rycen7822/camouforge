@@ -129,6 +129,21 @@ def test_firefox_user_prefs_and_extra_passthrough():
     kw = w.translate_profile(prof, Path("/tmp"))
     assert kw["firefox_user_prefs"]["browser.tabs.unloadOnLowMemory"] is True
     assert kw["foo"] == 1
+    assert prof["launch"]["firefox_user_prefs"] == {"browser.tabs.unloadOnLowMemory": True}
+
+
+def test_macos_defaults_and_startup_locale_match_identity():
+    import json
+
+    prof = make_profile(launch={"locale": ["ja-JP", "en-US"]})
+    kw = w.translate_profile(prof, Path("/tmp"))
+    prefs = kw["firefox_user_prefs"]
+    assert prefs["font.name.sans-serif.zh-CN"] == "PingFang SC"
+    assert prefs["font.name.serif.zh-CN"] == "Songti SC"
+    assert prefs["intl.locale.requested"] == "ja-JP,en-US"
+    assert json.loads(kw["env"]["CAMOU_PREFS_1"]) == prefs
+    assert kw["env"]["TMP"] == os.environ["TMP"]
+    assert "Songti SC" in kw["fonts"]
 
 
 def test_fingerprint_strips_prefixes_and_writes_dpr():
@@ -424,6 +439,8 @@ def test_chrome_css_patches_append_incrementally_and_are_idempotent():
         assert t1.count(browser_patches._TITLEBAR_SVG_MARKER) == 1
         assert browser_patches._TAB_CLICK_MARKER in t1
         assert browser_patches._TAB_LAYOUT_MARKER in t1
+        assert browser_patches._NEWTAB_BUTTON_MARKER in t1
+        assert '#tabbrowser-tabs:not([overflow]) #tabs-newtab-button' in t1
         assert browser_patches._CHROME_DARK_THEME_MARKER in t1
         assert "-moz-window-dragging: no-drag" in t1
         assert "pointer-events: auto" in t1

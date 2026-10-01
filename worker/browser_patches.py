@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 MACOS_EMOJI_FAMILY = "Apple Color Emoji"
+MACOS_DEFAULT_FONTS = {
+    "x-western": ("Helvetica", "Times", "Menlo"),
+    "zh-CN": ("PingFang SC", "Songti SC", "PingFang SC"),
+    "zh-TW": ("PingFang TC", "Songti TC", "PingFang TC"),
+    "zh-HK": ("PingFang HK", "Songti TC", "PingFang HK"),
+    "ja": ("Hiragino Kaku Gothic ProN", "Hiragino Mincho ProN", "Menlo"),
+    "ko": ("Apple SD Gothic Neo", "AppleMyungjo", "Menlo"),
+}
 _MACOS_EMOJI_FONT = "AppleColorEmoji.ttf"
 _MACOS_EMOJI_REPAIR_DIR = ".camouforge-font-repair"
 _MACOS_EMOJI_SOURCE = "AppleColorEmoji.camouforge-source"
@@ -65,6 +73,20 @@ _TAB_LAYOUT_CSS = """
  * Marker: CAMOUFORGE_TAB_LAYOUT. */
 #TabsToolbar .tabbrowser-tab[fadein]:not([pinned]) {
   max-width: 240px !important;
+}
+"""
+
+_NEWTAB_BUTTON_MARKER = "CAMOUFORGE_NEWTAB_BUTTON"
+_NEWTAB_BUTTON_CSS = """
+/* The bundled toolbar places new-tab-button in nav-bar, hiding this button.
+ * Marker: CAMOUFORGE_NEWTAB_BUTTON. Keep native overflow handling. */
+#tabbrowser-tabs:not([overflow]) #tabs-newtab-button {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px !important;
+  width: 28px !important;
+  -moz-window-dragging: no-drag !important;
 }
 """
 
@@ -134,18 +156,18 @@ _CHROME_CSS_PATCHES = (
     (_TITLEBAR_SVG_MARKER, _TITLEBAR_SVG_CSS),
     (_TAB_CLICK_MARKER, _TAB_CLICK_CSS),
     (_TAB_LAYOUT_MARKER, _TAB_LAYOUT_CSS),
+    (_NEWTAB_BUTTON_MARKER, _NEWTAB_BUTTON_CSS),
     (_CHROME_DARK_THEME_MARKER, _CHROME_DARK_THEME_CSS),
 )
 
 
-def _font_has_cbdt_emoji(path: Path) -> bool:
+def _font_has_bitmap_emoji(path: Path) -> bool:
     try:
         from fontTools.ttLib import TTFont
 
-        with TTFont(path, lazy=True) as font:
+        with TTFont(path, fontNumber=0, lazy=True) as font:
             return (
-                "CBDT" in font
-                and "CBLC" in font
+                ("sbix" in font or ("CBDT" in font and "CBLC" in font))
                 and font["name"].getDebugName(1) == MACOS_EMOJI_FAMILY
             )
     except Exception:
@@ -156,7 +178,7 @@ def _font_has_svg_emoji(path: Path) -> bool:
     try:
         from fontTools.ttLib import TTFont
 
-        with TTFont(path, lazy=True) as font:
+        with TTFont(path, fontNumber=0, lazy=True) as font:
             head = font["head"]
             hhea = font["hhea"]
             return (
@@ -164,6 +186,8 @@ def _font_has_svg_emoji(path: Path) -> bool:
                 and "glyf" in font
                 and "CBDT" not in font
                 and "CBLC" not in font
+                and "sbix" not in font
+                and font["cmap"].getcmap(3, 10) is not None
                 and font["name"].getDebugName(1) == MACOS_EMOJI_FAMILY
                 and head.xMax > head.xMin
                 and head.yMax > head.yMin
@@ -210,17 +234,58 @@ def _svg_images_are_firefox_compatible(font: Any) -> bool:
     )
 
 
-def _convert_apple_emoji_to_svg(source: Path, destination: Path) -> None:
+def _emoji_bitmaps(font: Any):
+    import struct
+
+    if "sbix" in font:
+        strike = max(font["sbix"].strikes.values(), key=lambda s: s.ppem)
+        scale = font["head"].unitsPerEm / strike.ppem
+        for name, glyph in strike.glyphs.items():
+            if glyph.graphicType is None:
+                continue
+            bitmap = glyph
+            flipped = False
+            visited = set()
+            while bitmap.is_reference_type():
+                if bitmap.glyphName in visited:
+                    raise ValueError("sbix 字形引用循环")
+                visited.add(bitmap.glyphName)
+                flipped ^= bitmap.graphicType == "flip"
+                bitmap = strike.glyphs[bitmap.referenceGlyphName]
+            if bitmap.graphicType != "png ":
+                raise ValueError(f"不支持的 sbix 图片格式: {bitmap.graphicType}")
+            width, height = struct.unpack(">II", bitmap.imageData[16:24])
+            yield (name, bitmap.imageData, glyph.originOffsetX * scale,
+                   -(glyph.originOffsetY + height) * scale,
+                   width * scale, height * scale, flipped)
+    else:
+        strike = font["CBDT"].strikeData[0]
+        scale = font["head"].unitsPerEm / font["CBLC"].strikes[0].bitmapSizeTable.ppemY
+        for name, bitmap in strike.items():
+            bitmap.ensureDecompiled()
+            metrics = bitmap.metrics
+            yield (name, bitmap.imageData, metrics.BearingX * scale,
+                   -metrics.BearingY * scale, metrics.width * scale,
+                   metrics.height * scale, False)
+
+
+def _convert_emoji_font_to_svg(font: Any) -> None:
     import base64
 
     from fontTools.pens.ttGlyphPen import TTGlyphPen
-    from fontTools.ttLib import TTFont, newTable
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
-    with TTFont(source, recalcBBoxes=False, recalcTimestamp=False) as font:
-        if "CBDT" not in font or "CBLC" not in font:
-            raise ValueError("缺少 CBDT/CBLC 彩色位图表")
-
-        # Firefox on Windows needs outline tables even when SVG supplies the image.
+    if "sbix" not in font and not ("CBDT" in font and "CBLC" in font):
+        raise ValueError("缺少 sbix 或 CBDT/CBLC 彩色位图表")
+    # Apple's Unicode-only cmap is not sufficient for Windows glyph lookup.
+    if font["cmap"].getcmap(3, 10) is None:
+        cmap = CmapSubtable.newSubtable(12)
+        cmap.platformID, cmap.platEncID, cmap.language = 3, 10, 0
+        cmap.cmap = dict(font.getBestCmap())
+        font["cmap"].tables.append(cmap)
+    # Windows Firefox requires outline tables; preserve the bundled outlines.
+    if "glyf" not in font:
         glyph_order = font.getGlyphOrder()
         glyf = newTable("glyf")
         glyf.glyphs = {name: TTGlyphPen(None).glyph() for name in glyph_order}
@@ -247,36 +312,44 @@ def _convert_apple_emoji_to_svg(source: Path, destination: Path) -> None:
         ):
             setattr(maxp, field, 0)
 
-        strike = font["CBDT"].strikeData[0]
-        ppem = font["CBLC"].strikes[0].bitmapSizeTable.ppemY
-        scale = font["head"].unitsPerEm / ppem
-        svg = newTable("SVG ")
-        svg.docList = []
-        for glyph_name in sorted(strike, key=font.getGlyphID):
-            glyph_id = font.getGlyphID(glyph_name)
-            bitmap = strike[glyph_name]
-            bitmap.ensureDecompiled()
-            metrics = bitmap.metrics
-            png = base64.b64encode(bitmap.imageData).decode("ascii")
-            # Firefox 152 renders embedded PNGs through SVG 1.1 xlink; plain
-            # SVG2 href produces transparent glyphs despite valid metrics.
-            document = (
-                '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
-                'xmlns:xlink="http://www.w3.org/1999/xlink">'
-                f'<g id="glyph{glyph_id}">'
-                f'<image x="{metrics.BearingX * scale:.3f}" '
-                f'y="{-metrics.BearingY * scale:.3f}" '
-                f'width="{metrics.width * scale:.3f}" '
-                f'height="{metrics.height * scale:.3f}" '
-                f'xlink:href="data:image/png;base64,{png}"/>'
-                "</g></svg>"
-            )
-            svg.docList.append((document, glyph_id, glyph_id, True))
-        font["SVG "] = svg
-        del font["CBDT"]
-        del font["CBLC"]
-        _restore_font_bounds(font)
-        font.save(destination, reorderTables=False)
+    svg = newTable("SVG ")
+    svg.docList = []
+    for name, image, x, y, width, height, flipped in _emoji_bitmaps(font):
+        glyph_id = font.getGlyphID(name)
+        png = base64.b64encode(image).decode("ascii")
+        transform = f' transform="translate({2 * x + width:.3f},0) scale(-1,1)"' if flipped else ""
+        # SVG 1.1 xlink is required: SVG2 href renders transparent in Firefox.
+        document = (
+            '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
+            'xmlns:xlink="http://www.w3.org/1999/xlink">'
+            f'<g id="glyph{glyph_id}"{transform}>'
+            f'<image x="{x:.3f}" y="{y:.3f}" '
+            f'width="{width:.3f}" height="{height:.3f}" '
+            f'xlink:href="data:image/png;base64,{png}"/>'
+            "</g></svg>"
+        )
+        svg.docList.append((document, glyph_id, glyph_id, True))
+    svg.docList.sort(key=lambda document: document[1])
+    font["SVG "] = svg
+    for table in ("sbix", "CBDT", "CBLC", "DSIG"):
+        if table in font:
+            del font[table]
+    _restore_font_bounds(font)
+
+
+def _convert_apple_emoji_to_svg(source: Path, destination: Path) -> None:
+    from fontTools.ttLib import TTCollection, TTFont
+
+    with source.open("rb") as stream:
+        is_collection = stream.read(4) == b"ttcf"
+    cls = TTCollection if is_collection else TTFont
+    with cls(source, recalcBBoxes=False, recalcTimestamp=False) as file:
+        for font in file.fonts if is_collection else [file]:
+            _convert_emoji_font_to_svg(font)
+        if is_collection:
+            file.save(destination)
+        else:
+            file.save(destination, reorderTables=False)
 
 
 def _backup_emoji_source(source: Path, destination: Path) -> None:
@@ -284,7 +357,7 @@ def _backup_emoji_source(source: Path, destination: Path) -> None:
     pending = destination.with_name(f"{destination.name}.pending")
     pending.unlink(missing_ok=True)
     shutil.copyfile(source, pending)
-    if not _font_has_cbdt_emoji(pending):
+    if not _font_has_bitmap_emoji(pending):
         pending.unlink(missing_ok=True)
         raise RuntimeError("原字体备份校验失败")
     os.replace(pending, destination)
@@ -297,6 +370,8 @@ def _ensure_macos_emoji_font(executable_path: Optional[str]) -> None:
     browser_dir = Path(executable_path).parent
     fonts_dir = browser_dir / "fonts"
     destination = fonts_dir / _MACOS_EMOJI_FONT
+    if not destination.exists():
+        destination = next(fonts_dir.glob("*Apple*Emoji*.ttc"), destination)
     pending = destination.with_name(f"{destination.name}.pending")
     source = browser_dir / _MACOS_EMOJI_REPAIR_DIR / _MACOS_EMOJI_SOURCE
     try:
@@ -312,11 +387,11 @@ def _ensure_macos_emoji_font(executable_path: Optional[str]) -> None:
             print(f"[camoforge] 已启用 Windows 兼容的 Apple Color Emoji: {destination}", file=sys.stderr)
             return
 
-        if _font_has_cbdt_emoji(destination):
+        if _font_has_bitmap_emoji(destination):
             # Keep the source outside fonts/: Camoufox scans bundled font data
             # regardless of extension, and a second Apple family shadows SVG.
             _backup_emoji_source(destination, source)
-        elif not _font_has_cbdt_emoji(source):
+        elif not _font_has_bitmap_emoji(source):
             raise RuntimeError("找不到可转换的 Apple Color Emoji 原字体")
 
         pending.unlink(missing_ok=True)

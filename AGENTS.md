@@ -38,7 +38,7 @@
 
 ## 从示例创建新身份
 
-`examples/example-profile.json` 是完整可用的身份模板（东京出口 / macOS Firefox 152 固定
+`examples/example-profile.json` 是完整可用的身份模板（东京出口 / macOS Firefox 156 固定
 指纹），结构与应用存储格式逐字段一致。帮用户创建身份的步骤：
 
 1. 以示例为基底，把 `id` 改为新随机 UUIDv4（示例的全零 UUID 保留给示例本身，勿复用），
