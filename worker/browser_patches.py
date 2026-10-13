@@ -23,13 +23,7 @@ _MACOS_EMOJI_SOURCE = "AppleColorEmoji.camouforge-source"
 
 _TITLEBAR_SVG_MARKER = "CAMOUFORGE_TITLEBAR_SVG"
 _TITLEBAR_SVG_CSS = """
-/* ===== CamouForge patch: SVG window caption buttons =====
- * Fingerprint injection replaces the available fonts with the bundled
- * macOS set (fonts/), so "Segoe Fluent Icons" / "Segoe MDL2 Assets" are
- * missing and browser.css glyphs (\\e921 \\e922 \\e923 \\e8bb) render as hex
- * boxes. Draw the caption buttons with inline SVG instead of system icon
- * fonts. Marker: CAMOUFORGE_TITLEBAR_SVG (worker re-applies if missing).
- */
+/* CAMOUFORGE_TITLEBAR_SVG: macOS font sets omit Windows caption glyphs. */
 .titlebar-min,
 .titlebar-max,
 .titlebar-restore,
@@ -54,10 +48,7 @@ _TITLEBAR_SVG_CSS = """
 
 _TAB_CLICK_MARKER = "CAMOUFORGE_TAB_CLICK"
 _TAB_CLICK_CSS = """
-/* CamouForge patch: restore normal single-click tab selection.
- * The bundled theme makes #TabsToolbar draggable and lets tabs inherit that
- * state while disabling their content's pointer events. Keep only the empty
- * toolbar area draggable. Marker: CAMOUFORGE_TAB_CLICK. */
+/* CAMOUFORGE_TAB_CLICK: keep tabs clickable, not draggable window regions. */
 #TabsToolbar .tabbrowser-tab,
 #TabsToolbar .tab-content {
   -moz-window-dragging: no-drag !important;
@@ -69,8 +60,7 @@ _TAB_CLICK_CSS = """
 
 _TAB_LAYOUT_MARKER = "CAMOUFORGE_TAB_LAYOUT"
 _TAB_LAYOUT_CSS = """
-/* Keep regular tabs bounded so the trailing toolbar remains draggable.
- * Marker: CAMOUFORGE_TAB_LAYOUT. */
+/* CAMOUFORGE_TAB_LAYOUT: reserve draggable space after tabs. */
 #TabsToolbar .tabbrowser-tab[fadein]:not([pinned]) {
   max-width: 240px !important;
 }
@@ -78,8 +68,7 @@ _TAB_LAYOUT_CSS = """
 
 _NEWTAB_BUTTON_MARKER = "CAMOUFORGE_NEWTAB_BUTTON"
 _NEWTAB_BUTTON_CSS = """
-/* The bundled toolbar places new-tab-button in nav-bar, hiding this button.
- * Marker: CAMOUFORGE_NEWTAB_BUTTON. Keep native overflow handling. */
+/* CAMOUFORGE_NEWTAB_BUTTON: preserve native tab overflow handling. */
 #tabbrowser-tabs:not([overflow]) #tabs-newtab-button {
   display: flex !important;
   align-items: center;
@@ -92,9 +81,7 @@ _NEWTAB_BUTTON_CSS = """
 
 _CHROME_DARK_THEME_MARKER = "CAMOUFORGE_CHROME_DARK_THEME"
 _CHROME_DARK_THEME_CSS = """
-/* Match Chrome's dark theme color hierarchy: a near-black inactive tab strip,
- * a charcoal active tab/navigation surface, and a dark omnibox that turns
- * light while focused. Marker: CAMOUFORGE_CHROME_DARK_THEME. */
+/* CAMOUFORGE_CHROME_DARK_THEME */
 :root {
   --lwt-accent-color: #1f2020 !important;
   --lwt-text-color: #e8eaed !important;
@@ -556,19 +543,25 @@ def _shortcut_extension_dir(profile: Dict[str, Any]) -> Optional[str]:
     return str(ext_dir)
 
 
-def _ensure_chrome_css_patches(executable_path: Optional[str]) -> None:
-    """幂等补齐 Camoufox 浏览器 chrome.css 修复。"""
-    if not executable_path:
+def _ensure_chrome_css_patches(
+    executable_path: Optional[str], user_data_dir: Optional[str] = None
+) -> None:
+    """身份样式随 profile 保留；旧版非持久化实例仍使用浏览器自带样式文件。"""
+    if user_data_dir:
+        css = Path(user_data_dir) / "chrome" / "userChrome.css"
+    elif executable_path:
+        css = Path(executable_path).parent / "chrome.css"
+    else:
         return
-    css = Path(executable_path).parent / "chrome.css"
     try:
-        if not css.exists():
+        if not user_data_dir and not css.exists():
             print(f"[camoforge] 浏览器样式补丁跳过：{css} 不存在", file=sys.stderr)
             return
-        text = css.read_text(encoding="utf-8", errors="replace")
+        text = css.read_text(encoding="utf-8", errors="replace") if css.exists() else ""
         missing = [body for marker, body in _CHROME_CSS_PATCHES if marker not in text]
         if not missing:
             return
+        css.parent.mkdir(parents=True, exist_ok=True)
         css.write_text(text + "".join(missing), encoding="utf-8")
         written = css.read_text(encoding="utf-8", errors="replace")
         failed = [marker for marker, _ in _CHROME_CSS_PATCHES if marker not in written]

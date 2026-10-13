@@ -3,7 +3,7 @@ name = "camouforge-worker-runtime"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "camoufox==0.5.5",
+    "camoufox[geoip]==0.5.5",
     "browserforge==1.2.4",
     "fonttools>=4.59,<5",
 ]

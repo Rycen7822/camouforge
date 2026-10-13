@@ -236,6 +236,8 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
 
     prefs = dict(kw.get("firefox_user_prefs") or {})
     kw["firefox_user_prefs"] = prefs
+    if kw.get("user_data_dir"):
+        prefs.setdefault("toolkit.legacyUserProfileCustomizations.stylesheets", True)
     if macos_target:
         for script, families in MACOS_DEFAULT_FONTS.items():
             for style, family in zip(("sans-serif", "serif", "monospace"), families):
