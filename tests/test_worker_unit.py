@@ -102,6 +102,42 @@ def test_geoip_modes():
     assert kw["geoip"] == "1.2.3.4"
 
 
+def test_geoip_cache_hit_and_refresh():
+    from unittest.mock import patch
+
+    import camoufox.geolocation as geolocation
+    import camoufox.ip as ip_lookup
+    import camoufox.utils as utils
+    import geoip_cache
+    from camoufox.locales import Geolocation, Locale
+
+    w.SDK.load()
+    assert utils.public_ip is ip_lookup.public_ip.__wrapped__
+    assert utils.get_geolocation is geoip_cache.get_cached_geolocation
+    result = Geolocation(Locale("ja", "JP"), 139.7, 35.6, "Asia/Tokyo")
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        patch.object(geolocation, "GEOIP_DIR", Path(tmp)),
+        patch.object(geolocation, "get_geolocation", return_value=result) as lookup,
+        patch.object(geoip_cache.time, "time", return_value=1000) as clock,
+    ):
+        def cached(ip):
+            return geoip_cache.get_cached_geolocation(ip, "MaxMind GeoLite2")
+
+        assert cached("192.0.2.1") == result
+        clock.return_value = 1000 + geoip_cache._MAX_AGE - 1
+        assert cached("192.0.2.1") == result
+        assert lookup.call_count == 1
+        clock.return_value += 1
+        assert cached("192.0.2.1") == result
+        assert lookup.call_count == 2
+        assert cached("192.0.2.2") == result
+        assert lookup.call_count == 3
+        (Path(tmp) / "lookup.json").write_text("invalid json", encoding="utf-8")
+        assert cached("192.0.2.2") == result
+        assert lookup.call_count == 4
+
+
 def test_locale_single_flattened():
     kw = w.translate_profile(make_profile(launch={"locale": ["zh-CN"]}), Path("/tmp"))
     assert kw["locale"] == "zh-CN"
@@ -116,9 +152,13 @@ def test_exclude_addons_ubo_shortname():
 
 
 def test_persistent_context_default_user_data_dir():
+    import json
+
     kw = w.translate_profile(make_profile(launch={"persistent_context": True}), Path("/tmp"))
     assert kw["persistent_context"] is True
     assert kw["user_data_dir"] == str(Path("/tmp") / "unit-1")
+    assert kw["firefox_user_prefs"]["toolkit.legacyUserProfileCustomizations.stylesheets"] is True
+    assert json.loads(kw["env"]["CAMOU_PREFS_1"]) == kw["firefox_user_prefs"]
 
 
 def test_firefox_user_prefs_and_extra_passthrough():
@@ -451,6 +491,22 @@ def test_chrome_css_patches_append_incrementally_and_are_idempotent():
         assert "background-color: #3c3c3c" in t1
         browser_patches._ensure_chrome_css_patches(str(exe))
         assert css.read_text(encoding="utf-8") == t1
+
+
+def test_chrome_css_patches_create_profile_stylesheet():
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "camoufox.exe"
+        profile = Path(tmp) / "profile"
+        browser_patches._ensure_chrome_css_patches(str(exe), str(profile))
+        css = profile / "chrome" / "userChrome.css"
+        patched = css.read_text(encoding="utf-8")
+        assert not (exe.parent / "chrome.css").exists()
+        for marker, _ in browser_patches._CHROME_CSS_PATCHES:
+            assert patched.count(marker) == 1
+        custom = "\n#PersonalToolbar { opacity: 0.9; }\n"
+        css.write_text(patched + custom, encoding="utf-8")
+        browser_patches._ensure_chrome_css_patches(str(exe), str(profile))
+        assert css.read_text(encoding="utf-8") == patched + custom
 
 
 def test_shortcuts_page_uses_chrome_dark_background():
