@@ -236,6 +236,9 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
 
     prefs = dict(kw.get("firefox_user_prefs") or {})
     kw["firefox_user_prefs"] = prefs
+    if os.name == "nt" and not kw.get("headless"):
+        # Windows 输入法依赖原生焦点同步，testmode 会跳过它。
+        prefs.setdefault("focusmanager.testmode", False)
     if kw.get("user_data_dir"):
         prefs.setdefault("toolkit.legacyUserProfileCustomizations.stylesheets", True)
     if macos_target:
