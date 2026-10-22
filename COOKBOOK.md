@@ -316,7 +316,7 @@ registry 控件图例：✅=已下拉/Switch · 文本=自由输入 · `—`=未
 | 透传 | `os_version` `geoip_db` `locale` `ff_version` `executable_path` `browser` | 非空直接透传；`locale` 列表长 1 时展成 str |
 | `fonts` / `custom_fonts_only` | 同名 | 非 null 透传 |
 | `screen` | `screen` | exact→`Screen(min=max=w/h)`；range→min/max 四元组；off→省略 |
-| `window` | `window` 或写入指纹 | 有 fingerprint 时用 `handle_window_size` 写进指纹（SDK 忽略 window 参数）；无指纹时传 `(w,h)`；**headed 且未设窗口时默认 1280x720** |
+| `window` | `window` 或写入指纹 | 有 fingerprint 时用 `handle_window_size` 写进指纹（SDK 忽略 window 参数）；无指纹时传 `(w,h)`；headed 且未设窗口时，持久化身份读取其 `xulstore.json` 中上次正常窗口尺寸，无有效记录才用 1280x720；显式 `launch.window` 优先 |
 | `webgl_config` | `webgl_config` | `(vendor, renderer)` 元组 |
 | 布尔开关 | `block_images` `block_webrtc` `block_webgl` `disable_coop` `main_world_eval` `enable_cache` `debug` `i_know_what_im_doing` | 非 null 透传 |
 | `addons` / `exclude_addons` | 同名 | exclude 的 `"ubo"` 短名→`DefaultAddons.UBO` |

@@ -86,6 +86,26 @@ def test_window_explicit_tuple():
     assert kw["window"] == (1024, 768)
 
 
+def test_window_restores_native_size_and_keeps_explicit_override():
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        directory = root / "unit-1"
+        directory.mkdir()
+        store = directory / "xulstore.json"
+        store.write_text(json.dumps({"chrome://browser/content/browser.xhtml": {
+            "main-window": {"width": "1200", "height": "900", "sizemode": "normal"}
+        }}), encoding="utf-8")
+        profile = make_profile(launch={"headless": "headed", "persistent_context": True})
+        assert w.translate_profile(profile, root)["window"] == (1200, 900)
+        profile["launch"]["window"] = [1024, 768]
+        assert w.translate_profile(profile, root)["window"] == (1024, 768)
+        profile["launch"].pop("window")
+        store.write_text("{", encoding="utf-8")
+        assert w.translate_profile(profile, root)["window"] == (1280, 720)
+
+
 def test_proxy_and_port():
     prof = make_profile(launch={"proxy": {"server": "http://127.0.0.1:8080", "port": 1080}})
     kw = w.translate_profile(prof, Path("/tmp"))
