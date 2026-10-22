@@ -509,6 +509,30 @@ def test_chrome_css_patches_create_profile_stylesheet():
         assert css.read_text(encoding="utf-8") == patched + custom
 
 
+def test_native_focus_patch_preserves_browser_archive():
+    if os.name != "nt":
+        return
+    import zipfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "camoufox.exe"
+        archive = exe.parent / "omni.ja"
+        module = "modules/juggler/content/main.js"
+        with zipfile.ZipFile(archive, "w") as source:
+            source.writestr(module, "docShell.overrideHasFocus = true;\ndocShell.forceActiveState = true;")
+            source.writestr("unrelated.bin", b"\x00\xff\x01")
+        original = archive.read_bytes()
+        browser_patches._ensure_native_focus_patch(str(exe))
+        with zipfile.ZipFile(archive) as result:
+            assert result.read("unrelated.bin") == b"\x00\xff\x01"
+            assert b"focusmanager.testmode" in result.read(module)
+            assert b"docShell.forceActiveState = true;" in result.read(module)
+        assert (exe.parent / "omni.ja.camouforge-original").read_bytes() == original
+        patched = archive.read_bytes()
+        browser_patches._ensure_native_focus_patch(str(exe))
+        assert archive.read_bytes() == patched
+
+
 def test_shortcuts_page_uses_chrome_dark_background():
     html = browser_patches._build_shortcuts_html(
         [{"name": "Example", "url": "https://example.com"}]

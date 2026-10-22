@@ -13,6 +13,7 @@ from browser_patches import (
     _ensure_chrome_css_patches,
     _ensure_macos_emoji_font,
     _ensure_macos_emoji_whitelist,
+    _ensure_native_focus_patch,
     _ensure_session_history_pref,
     _shortcut_extension_dir,
     _shortcut_page,
@@ -108,6 +109,7 @@ class Manager:
             _ensure_macos_emoji_font(kw.get("executable_path"))
             _ensure_chrome_css_patches(kw.get("executable_path"), kw.get("user_data_dir"))
             _ensure_session_history_pref(kw.get("executable_path"))
+            _ensure_native_focus_patch(kw.get("executable_path"))
             inst = Instance(profile, bool(kw.get("headless")), kw.get("user_data_dir"))
             self.instances[pid] = inst
         downloads_dir = _resolve_downloads_dir(profile)

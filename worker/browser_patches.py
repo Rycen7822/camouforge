@@ -4,6 +4,8 @@ import os
 import re
 import shutil
 import sys
+import tempfile
+import zipfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -146,6 +148,47 @@ _CHROME_CSS_PATCHES = (
     (_NEWTAB_BUTTON_MARKER, _NEWTAB_BUTTON_CSS),
     (_CHROME_DARK_THEME_MARKER, _CHROME_DARK_THEME_CSS),
 )
+
+
+def _ensure_native_focus_patch(executable_path: Optional[str]) -> None:
+    if os.name != "nt" or not executable_path:
+        return
+    archive = Path(executable_path).parent / "omni.ja"
+    if not archive.is_file():
+        return
+    module = "modules/juggler/content/main.js"
+    original = "docShell.overrideHasFocus = true;"
+    # Juggler 的强制焦点会跳过 IME 失焦通知，需与原生焦点模式保持一致。
+    patched = 'docShell.overrideHasFocus = Services.prefs.getBoolPref("focusmanager.testmode", true);'
+    staging = None
+    try:
+        with zipfile.ZipFile(archive) as source:
+            if module not in source.namelist():
+                print(f"[camoforge] 原生焦点修复跳过：未找到 {module}", file=sys.stderr)
+                return
+            script = source.read(module).decode("utf-8")
+            if patched in script:
+                return
+            if script.count(original) != 1:
+                print("[camoforge] 原生焦点修复跳过：Juggler 实现已变化", file=sys.stderr)
+                return
+            script = script.replace(original, patched).encode("utf-8")
+            backup = archive.with_name("omni.ja.camouforge-original")
+            if not backup.exists():
+                shutil.copy2(archive, backup)
+            with tempfile.NamedTemporaryFile(dir=archive.parent, suffix=".ja.tmp", delete=False) as file:
+                staging = Path(file.name)
+            with zipfile.ZipFile(staging, "w") as target:
+                target.comment = source.comment
+                for info in source.infolist():
+                    target.writestr(info, script if info.filename == module else source.read(info))
+        staging.replace(archive)
+        print(f"[camoforge] 已修复 Juggler 原生焦点处理：{archive}", file=sys.stderr)
+    except Exception as e:
+        raise RuntimeError("无法应用原生焦点修复，请关闭使用该版本的浏览器后重试") from e
+    finally:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
 
 
 def _font_has_bitmap_emoji(path: Path) -> bool:
