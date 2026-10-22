@@ -141,6 +141,12 @@ class Manager:
             if shortcut_page:
                 prefs["browser.startup.homepage"] = shortcut_page
                 prefs["browser.startup.page"] = 1
+                if kw.get("persistent_context"):
+                    # 跳过 Playwright 的默认空白页，避免启动后再次导航。
+                    kw["args"] = [*(kw.get("args") or []), shortcut_page]
+                    ignored = kw.get("ignore_default_args")
+                    if ignored is not True:
+                        kw["ignore_default_args"] = [*(ignored or []), "about:blank"]
             if ext_dir:
                 # camoufox 默认 browser.newtabpage.enabled=false（新标签页空白）。
                 # 覆盖 newtab 的扩展只在 about:newtab 生效，故需重新启用新标签页。
@@ -198,11 +204,14 @@ class Manager:
                         await asyncio.sleep(0.25)
                 if page is not None and shortcut_page:
                     try:
-                        await page.goto(
-                            shortcut_page,
-                            wait_until="domcontentloaded",
-                            timeout=15_000,
-                        )
+                        if page.url == shortcut_page:
+                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        else:
+                            await page.goto(
+                                shortcut_page,
+                                wait_until="domcontentloaded",
+                                timeout=15_000,
+                            )
                     except Exception:
                         pass
                 inst.ready.set()
