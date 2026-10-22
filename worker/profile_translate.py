@@ -150,20 +150,26 @@ def translate_profile(profile: Dict[str, Any], user_data_root: Path) -> Dict[str
     # 传了 fingerprint 时 SDK 会忽略 window 参数（窗口尺寸由指纹 screen 决定），
     # 所以要把目标尺寸直接写进指纹；无指纹时才用 window 参数走 SDK 随机生成。
     fp = kw.get("fingerprint")
-    if lo.get("window"):
-        w = (int(lo["window"][0]), int(lo["window"][1]))
+    window = lo.get("window")
+    if not window and hl == "headed":
+        window = (1280, 720)
+        if lo.get("persistent_context"):
+            # Firefox 已保存正常窗口尺寸，直接复用，避免额外监听和写盘。
+            user_data_dir = Path(lo.get("user_data_dir") or user_data_root / profile["id"])
+            try:
+                store = json.loads((user_data_dir / "xulstore.json").read_text(encoding="utf-8"))
+                saved = store["chrome://browser/content/browser.xhtml"]["main-window"]
+                size = (int(saved["width"]), int(saved["height"]))
+                if min(size) > 0:
+                    window = size
+            except (OSError, ValueError, TypeError, KeyError):
+                pass
+    if window:
+        size = (int(window[0]), int(window[1]))
         if fp is not None:
-            _apply_window_to_fingerprint(fp, w)
+            _apply_window_to_fingerprint(fp, size)
         else:
-            kw["window"] = w
-    elif hl == "headed":
-        # camoufox 未指定 window 时会随机生成贴近指纹屏幕的尺寸（几乎全屏），体感过大。
-        # 默认 1280x720：≤ 最小常见指纹屏幕 1366x768 的可用区，避免 outer > screen 的
-        # 不可能几何泄漏；profile 的 launch.window 可随时覆盖。
-        if fp is not None:
-            _apply_window_to_fingerprint(fp, (1280, 720))
-        else:
-            kw["window"] = (1280, 720)
+            kw["window"] = size
 
     wc = lo.get("webgl_config")
     if wc and wc.get("vendor"):
