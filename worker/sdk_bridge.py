@@ -295,10 +295,9 @@ def _relocate_sdk_cache() -> None:
             root.mkdir(parents=True, exist_ok=True)
             import camoufox.addons
             import camoufox.geolocation
-            import camoufox.ip
             import camoufox.pkgman
             import camoufox.utils
-            from geoip_cache import get_cached_geolocation
+            from geoip_cache import get_cached_geolocation, get_public_ip
 
             camoufox.pkgman.INSTALL_DIR = root
             camoufox.addons.ADDONS_DIR = root / "addons"
@@ -307,7 +306,7 @@ def _relocate_sdk_cache() -> None:
             camoufox.geolocation.MMDB_DIR = geo / "mmdb"
             camoufox.geolocation.GEOIP_CONFIG = geo / "config.yml"
             # 同一代理配置也可能换出口，启动时必须重新检测 IP。
-            camoufox.utils.public_ip = camoufox.ip.public_ip.__wrapped__
+            camoufox.utils.public_ip = get_public_ip
             camoufox.utils.get_geolocation = get_cached_geolocation
             print(f"[camoforge] SDK 缓存目录: {root}", file=sys.stderr)
         except Exception as e:
