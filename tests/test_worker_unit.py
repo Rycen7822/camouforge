@@ -74,6 +74,8 @@ def test_headless_modes():
     assert kw["headless"] == "virtual"
     kw = w.translate_profile(make_profile(launch={"headless": "headed"}), Path("/tmp"))
     assert "headless" not in kw
+    if os.name == "nt":
+        assert kw["firefox_user_prefs"]["browser.nova.enabled"] is False
 
 
 def test_window_default_headed_1280x720():
