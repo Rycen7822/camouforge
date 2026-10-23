@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ MACOS_DEFAULT_FONTS = {
 _MACOS_EMOJI_FONT = "AppleColorEmoji.ttf"
 _MACOS_EMOJI_REPAIR_DIR = ".camouforge-font-repair"
 _MACOS_EMOJI_SOURCE = "AppleColorEmoji.camouforge-source"
+_SVG_EMOJI_VALIDATION_VERSION = 1  # 校验规则改变时使旧缓存失效。
 
 _TITLEBAR_SVG_MARKER = "CAMOUFORGE_TITLEBAR_SVG"
 _TITLEBAR_SVG_CSS = """
@@ -239,7 +241,25 @@ def _font_has_svg_emoji(path: Path) -> bool:
 
 @lru_cache(maxsize=8)
 def _cached_font_has_svg_emoji(path: str, _size: int, _mtime_ns: int) -> bool:
-    return _font_has_svg_emoji(Path(path))
+    font = Path(path)
+    cache = font.parent.parent / _MACOS_EMOJI_REPAIR_DIR / "emoji-validation.json"
+    stamp = [_SVG_EMOJI_VALIDATION_VERSION, path, _size, _mtime_ns]
+    try:
+        if json.loads(cache.read_text(encoding="utf-8")) == stamp:
+            return True
+    except (OSError, ValueError):
+        pass
+    if not _font_has_svg_emoji(font):
+        return False
+    try:
+        # 放在 fonts/ 外，避免被浏览器误当作字体加载。
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        pending = cache.with_suffix(".tmp")
+        pending.write_text(json.dumps(stamp), encoding="utf-8")
+        pending.replace(cache)
+    except OSError:
+        pass
+    return True
 
 
 def _validated_svg_emoji(path: Path) -> bool:

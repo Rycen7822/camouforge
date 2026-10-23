@@ -128,13 +128,12 @@ def test_geoip_cache_hit_and_refresh():
     from unittest.mock import patch
 
     import camoufox.geolocation as geolocation
-    import camoufox.ip as ip_lookup
     import camoufox.utils as utils
     import geoip_cache
     from camoufox.locales import Geolocation, Locale
 
     w.SDK.load()
-    assert utils.public_ip is ip_lookup.public_ip.__wrapped__
+    assert utils.public_ip is geoip_cache.get_public_ip
     assert utils.get_geolocation is geoip_cache.get_cached_geolocation
     result = Geolocation(Locale("ja", "JP"), 139.7, 35.6, "Asia/Tokyo")
     with (
@@ -158,6 +157,48 @@ def test_geoip_cache_hit_and_refresh():
         (Path(tmp) / "lookup.json").write_text("invalid json", encoding="utf-8")
         assert cached("192.0.2.2") == result
         assert lookup.call_count == 4
+
+
+def test_exit_ip_uses_current_proxy_without_waiting_for_slow_service():
+    import threading
+    from unittest.mock import patch
+
+    import geoip_cache
+
+    release = threading.Event()
+
+    def fetch(url, **kwargs):
+        proxy = kwargs["proxies"]["https"]
+        assert kwargs["proxies"]["http"] == proxy
+        if url == "https://api.ipify.org":
+            release.wait(2)
+            ip = "192.0.2.99"
+        else:
+            ip = "192.0.2.1" if proxy.endswith(":8001") else "192.0.2.2"
+        return SimpleNamespace(text=ip, raise_for_status=lambda: None)
+
+    try:
+        with patch("requests.get", side_effect=fetch):
+            assert geoip_cache.get_public_ip("http://127.0.0.1:8001") == "192.0.2.1"
+            assert geoip_cache.get_public_ip("http://127.0.0.1:8002") == "192.0.2.2"
+    finally:
+        release.set()
+
+
+def test_exit_ip_rejects_invalid_results_instead_of_using_stale_ip():
+    from unittest.mock import patch
+
+    from camoufox.exceptions import InvalidIP
+    import geoip_cache
+
+    response = SimpleNamespace(text="999.0.0.1", raise_for_status=lambda: None)
+    with patch("requests.get", return_value=response):
+        try:
+            geoip_cache.get_public_ip("http://127.0.0.1:8001")
+        except InvalidIP:
+            pass
+        else:
+            raise AssertionError("invalid exit IP was accepted")
 
 
 def test_locale_single_flattened():
@@ -321,7 +362,8 @@ def test_emoji_repair_source_is_outside_bundled_fonts_directory():
 
 def test_svg_emoji_validation_is_cached_by_file_metadata():
     with tempfile.TemporaryDirectory() as tmp:
-        font = Path(tmp) / "AppleColorEmoji.ttf"
+        font = Path(tmp) / "fonts" / "AppleColorEmoji.ttf"
+        font.parent.mkdir()
         font.write_bytes(b"first")
         calls = []
         original = browser_patches._font_has_svg_emoji
@@ -329,6 +371,10 @@ def test_svg_emoji_validation_is_cached_by_file_metadata():
         browser_patches._font_has_svg_emoji = lambda path: calls.append(path) or True
         try:
             assert browser_patches._validated_svg_emoji(font)
+            assert browser_patches._validated_svg_emoji(font)
+            assert len(calls) == 1
+
+            browser_patches._cached_font_has_svg_emoji.cache_clear()
             assert browser_patches._validated_svg_emoji(font)
             assert len(calls) == 1
 
