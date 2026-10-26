@@ -6,17 +6,19 @@ use gpui::{
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
     Window,
 };
+use gpui_component::button::Button;
 use gpui_component::searchable_list::{
     SearchableListChange, SearchableListDelegate, SearchableListItem,
 };
 use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{
-    h_flex, ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
+    h_flex, ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
+    StyledExt as _,
 };
 
 use crate::browser::{self, DownloadPhase};
-use crate::state::AppState;
+use crate::state::{AppState, AppView};
 
 #[derive(Debug, Clone)]
 pub struct BrowserVersionItem {
@@ -324,33 +326,28 @@ pub fn version_items(state: &AppState, app: &Entity<AppState>) -> Vec<BrowserVer
     items
 }
 
-pub fn render_download_overlay(
-    state: &mut AppState,
-    cx: &mut Context<AppState>,
-) -> Option<AnyElement> {
-    if state.browsers.downloads.is_empty() {
-        return None;
-    }
+pub fn render_download_cards(state: &AppState, cx: &mut Context<AppState>) -> Vec<AnyElement> {
     let fg = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
-    let surface = cx.theme().secondary;
-    let border = cx.theme().border;
     let mut cards: Vec<AnyElement> = Vec::new();
-    for dl in state.browsers.downloads.values() {
+    for (full, dl) in &state.browsers.downloads {
+        let paused = dl.control.is_paused();
+        let cancelled = dl.control.is_cancelled();
         let phase_text = match dl.phase {
-            DownloadPhase::Downloading => {
-                if dl.total > 0 {
-                    format!(
-                        "下载中 {:.1} / {:.1} MB",
-                        dl.downloaded as f64 / 1048576.0,
-                        dl.total as f64 / 1048576.0
-                    )
-                } else {
-                    format!("下载中 {:.1} MB", dl.downloaded as f64 / 1048576.0)
-                }
-            }
+            _ if cancelled => "正在取消…".to_string(),
+            _ if paused => format!("已暂停 · {:.1} MB", dl.downloaded as f64 / 1048576.0),
             DownloadPhase::Extracting => "解压中…".to_string(),
+            DownloadPhase::Downloading if dl.total == 0 => {
+                format!("下载中 {:.1} MB", dl.downloaded as f64 / 1048576.0)
+            }
+            DownloadPhase::Downloading => format!(
+                "下载中 {:.1} / {:.1} MB",
+                dl.downloaded as f64 / 1048576.0,
+                dl.total as f64 / 1048576.0
+            ),
         };
+        let pause_control = dl.control.clone();
+        let cancel_control = dl.control.clone();
         cards.push(
             div()
                 .flex()
@@ -364,21 +361,63 @@ pub fn render_download_overlay(
                             div()
                                 .text_sm()
                                 .font_semibold()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
                                 .text_color(fg)
-                                .child(format!("camoufox {}", dl.full)),
+                                .child(format!("camoufox {full}")),
                         )
                         .child(div().text_xs().text_color(muted).child(phase_text)),
                 )
                 .child(
-                    gpui_component::progress::Progress::new(SharedString::from(format!(
-                        "dl-progress-{}",
-                        dl.full
-                    )))
-                    .value(dl.percent()),
+                    h_flex()
+                        .gap_2()
+                        .w_full()
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                gpui_component::progress::Progress::new(SharedString::from(
+                                    format!("dl-progress-{full}"),
+                                ))
+                                .value(dl.percent()),
+                            ),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("pause-download-{full}")))
+                                .small()
+                                .disabled(cancelled)
+                                .label(if paused { "继续" } else { "暂停" })
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    pause_control.toggle_pause();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("cancel-download-{full}")))
+                                .small()
+                                .disabled(cancelled)
+                                .label("取消")
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cancel_control.cancel();
+                                    cx.notify();
+                                })),
+                        ),
                 )
                 .into_any_element(),
         );
     }
+    cards
+}
+
+pub fn render_download_overlay(
+    state: &mut AppState,
+    cx: &mut Context<AppState>,
+) -> Option<AnyElement> {
+    if state.current_view == AppView::Settings || state.browsers.downloads.is_empty() {
+        return None;
+    }
+    let surface = cx.theme().secondary;
+    let border = cx.theme().border;
+    let cards = render_download_cards(state, cx);
     Some(
         div()
             .absolute()

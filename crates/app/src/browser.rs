@@ -6,8 +6,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
-use std::io::{BufWriter, Read, Write as _};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
 
 const RELEASES_API: &str = "https://api.github.com/repos/daijro/camoufox/releases?per_page=100";
 /// 进度节流：变化 ≥1MB 才发一条，避免无意义的高频 UI 更新。
@@ -40,6 +41,57 @@ pub enum DownloadMsg {
         full: String,
         error: String,
     },
+    Cancelled {
+        full: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum DownloadCommand {
+    #[default]
+    Running,
+    Paused,
+    Cancelled,
+}
+
+#[derive(Debug, Default)]
+pub struct DownloadControl {
+    command: Mutex<DownloadCommand>,
+    changed: Condvar,
+}
+
+impl DownloadControl {
+    pub fn toggle_pause(&self) {
+        let mut command = self.command.lock().unwrap();
+        *command = match *command {
+            DownloadCommand::Running => DownloadCommand::Paused,
+            DownloadCommand::Paused => DownloadCommand::Running,
+            DownloadCommand::Cancelled => DownloadCommand::Cancelled,
+        };
+        self.changed.notify_all();
+    }
+
+    pub fn cancel(&self) {
+        *self.command.lock().unwrap() = DownloadCommand::Cancelled;
+        self.changed.notify_all();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        *self.command.lock().unwrap() == DownloadCommand::Paused
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.command.lock().unwrap() == DownloadCommand::Cancelled
+    }
+
+    fn checkpoint(&self) -> Result<()> {
+        let mut command = self.command.lock().unwrap();
+        while *command == DownloadCommand::Paused {
+            command = self.changed.wait(command).unwrap();
+        }
+        anyhow::ensure!(*command != DownloadCommand::Cancelled, "下载已取消");
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,10 +102,10 @@ pub enum DownloadPhase {
 
 #[derive(Debug, Clone)]
 pub struct DownloadState {
-    pub full: String,
     pub downloaded: u64,
     pub total: u64,
     pub phase: DownloadPhase,
+    pub control: Arc<DownloadControl>,
 }
 
 impl DownloadState {
@@ -189,12 +241,52 @@ pub fn scan_installed(root: &Path) -> Vec<String> {
     out
 }
 
+fn installed_version_dir(root: &Path, full: &str) -> Result<PathBuf> {
+    use std::path::Component;
+
+    let mut parts = Path::new(full).components();
+    anyhow::ensure!(
+        root.is_absolute()
+            && !full.starts_with('.')
+            && matches!(parts.next(), Some(Component::Normal(_)))
+            && parts.next().is_none(),
+        "无效的浏览器版本目录"
+    );
+    let directory = root.join(full);
+    let metadata = std::fs::symlink_metadata(&directory).context("读取浏览器目录")?;
+    anyhow::ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "浏览器目录不能是链接"
+    );
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        anyhow::ensure!(
+            metadata.file_attributes() & 0x400 == 0,
+            "浏览器目录不能是目录联接"
+        );
+    }
+    anyhow::ensure!(
+        directory.canonicalize()?.parent() == Some(root.canonicalize()?.as_path())
+            && directory.join(exe_name()).is_file(),
+        "仅可删除浏览器管理目录中的已安装版本"
+    );
+    Ok(directory)
+}
+
+pub fn remove_installed(root: &Path, full: &str) -> Result<()> {
+    let directory = installed_version_dir(root, full)?;
+    std::fs::remove_dir_all(&directory)
+        .with_context(|| format!("删除 {} 失败，请确认浏览器已关闭", directory.display()))
+}
+
 /// 下载并安装一个 release 到 `<root>/<full>/`；失败时已清理临时目录，
 /// 不产生半成品版本目录。
 pub fn download_release(
     rel: &Release,
     root: &Path,
     tx: &async_channel::Sender<DownloadMsg>,
+    control: &DownloadControl,
 ) -> Result<()> {
     if rel.asset_url.is_empty() {
         return Err(anyhow!("该版本缺少下载地址"));
@@ -208,7 +300,7 @@ pub fn download_release(
     let part = root.join(format!(".part-{}-{}", rel.full, std::process::id()));
     let _ = std::fs::remove_dir_all(&part);
     std::fs::create_dir_all(&part).with_context(|| format!("创建临时目录 {}", part.display()))?;
-    let result = download_and_extract(rel, root, &part, tx);
+    let result = download_and_extract(rel, root, &part, tx, control);
     if result.is_err() {
         let _ = std::fs::remove_dir_all(&part);
     }
@@ -220,59 +312,93 @@ fn download_and_extract(
     root: &Path,
     part: &Path,
     tx: &async_channel::Sender<DownloadMsg>,
+    control: &DownloadControl,
 ) -> Result<()> {
     let agent = crate::net::http_agent()?;
-    let resp = agent
-        .get(&rel.asset_url)
-        .call()
-        .map_err(|e| anyhow!("下载请求失败: {e}"))?;
-    let total = resp
-        .header("Content-Length")
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(rel.size);
-
+    let report_progress = |downloaded, total| {
+        let _ = tx.send_blocking(DownloadMsg::Progress {
+            full: rel.full.clone(),
+            downloaded,
+            total,
+        });
+    };
     let zip_path = part.join("camoufox.zip");
     let file =
         std::fs::File::create(&zip_path).with_context(|| format!("创建 {}", zip_path.display()))?;
     let mut writer = BufWriter::new(file);
-    let mut reader = resp.into_reader();
     let mut buf = [0u8; 64 * 1024];
     let mut downloaded: u64 = 0;
     let mut last_sent: u64 = 0;
-    loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| anyhow!("下载中断: {e}"))?;
-        if n == 0 {
+    let mut total = rel.size;
+    'transfer: loop {
+        control.checkpoint()?;
+        if downloaded > 0 && total > 0 && downloaded == total {
             break;
         }
-        writer
-            .write_all(&buf[..n])
-            .with_context(|| format!("写入 {}", zip_path.display()))?;
-        downloaded += n as u64;
-        if downloaded - last_sent >= PROGRESS_CHUNK {
-            let _ = tx.send_blocking(DownloadMsg::Progress {
-                full: rel.full.clone(),
-                downloaded,
-                total,
-            });
-            last_sent = downloaded;
+        let mut request = agent.get(&rel.asset_url);
+        if downloaded > 0 {
+            request = request.set("Range", &format!("bytes={downloaded}-"));
+        }
+        let resp = request.call().map_err(|e| anyhow!("下载请求失败: {e}"))?;
+        if downloaded > 0 {
+            if resp.status() == 206 {
+                anyhow::ensure!(
+                    resp.header("Content-Range")
+                        .is_some_and(|range| range.starts_with(&format!("bytes {downloaded}-"))),
+                    "服务器返回的续传位置不正确"
+                );
+            } else {
+                // 不支持 Range 时重新下载，不能把整包追加到已有内容。
+                writer.get_mut().set_len(0)?;
+                writer.seek(SeekFrom::Start(0))?;
+                downloaded = 0;
+                last_sent = 0;
+            }
+        }
+        total = if resp.status() == 206 {
+            resp.header("Content-Range")
+                .and_then(|value| value.rsplit('/').next())
+                .and_then(|value| value.parse().ok())
+        } else {
+            resp.header("Content-Length")
+                .and_then(|value| value.parse().ok())
+        }
+        .unwrap_or(rel.size);
+        report_progress(downloaded, total);
+        let mut reader = resp.into_reader();
+        loop {
+            if control.is_paused() {
+                writer.flush()?;
+                break;
+            }
+            anyhow::ensure!(!control.is_cancelled(), "下载已取消");
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| anyhow!("下载中断: {e}"))?;
+            if n == 0 {
+                anyhow::ensure!(total == 0 || downloaded == total, "下载文件不完整");
+                break 'transfer;
+            }
+            writer
+                .write_all(&buf[..n])
+                .with_context(|| format!("写入 {}", zip_path.display()))?;
+            downloaded += n as u64;
+            if downloaded - last_sent >= PROGRESS_CHUNK {
+                report_progress(downloaded, total);
+                last_sent = downloaded;
+            }
         }
     }
     writer.flush().context("flush 下载文件")?;
     drop(writer);
-    let _ = tx.send_blocking(DownloadMsg::Progress {
-        full: rel.full.clone(),
-        downloaded,
-        total,
-    });
+    report_progress(downloaded, total);
 
     let unpacked = part.join("unpacked");
     std::fs::create_dir_all(&unpacked).context("创建解压目录")?;
     let _ = tx.send_blocking(DownloadMsg::Extracting {
         full: rel.full.clone(),
     });
-    extract_zip(&zip_path, &unpacked)?;
+    extract_zip(&zip_path, &unpacked, control)?;
 
     if !unpacked.join(exe_name()).exists() {
         return Err(anyhow!("解压结果缺少 {}，资产结构与预期不符", exe_name()));
@@ -290,6 +416,7 @@ fn download_and_extract(
     )
     .context("写入 version.json")?;
 
+    control.checkpoint()?;
     let final_dir = root.join(&rel.full);
     if final_dir.exists() {
         if final_dir.join(exe_name()).exists() {
@@ -306,7 +433,7 @@ fn download_and_extract(
 }
 
 /// 解压 zip 到 dest。若全部条目位于同一顶层目录（部分打包方式），剥离该目录层级。
-fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
+fn extract_zip(zip_path: &Path, dest: &Path, control: &DownloadControl) -> Result<()> {
     let file =
         std::fs::File::open(zip_path).with_context(|| format!("打开 {}", zip_path.display()))?;
     let mut zf = zip::ZipArchive::new(std::io::BufReader::new(file))
@@ -318,6 +445,7 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
     let skip_components = common_root_depth(&names);
 
     for i in 0..zf.len() {
+        control.checkpoint()?;
         let mut entry = zf.by_index(i).with_context(|| format!("读取条目 {i}"))?;
         // enclosed_name 拒绝绝对路径与 .. 穿越（zip slip）
         let Some(enc) = entry.enclosed_name() else {
@@ -337,7 +465,17 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
         }
         let mut of =
             std::fs::File::create(&out).with_context(|| format!("创建 {}", out.display()))?;
-        std::io::copy(&mut entry, &mut of).with_context(|| format!("解压 {}", entry.name()))?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            control.checkpoint()?;
+            let count = entry
+                .read(&mut buf)
+                .with_context(|| format!("解压 {}", entry.name()))?;
+            if count == 0 {
+                break;
+            }
+            of.write_all(&buf[..count])?;
+        }
     }
     Ok(())
 }
@@ -365,6 +503,143 @@ fn common_root_depth(names: &[String]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_pause_resume_and_cancel() {
+        use std::io::{BufRead, Cursor};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file(
+            exe_name(),
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(&vec![b'x'; 2 * PROGRESS_CHUNK as usize])
+            .unwrap();
+        let data = zip.finish().unwrap().into_inner();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (pause_tx, pause_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for round in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut headers = String::new();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    headers.push_str(&line);
+                }
+                let offset = if round == 0 {
+                    0
+                } else {
+                    PROGRESS_CHUNK as usize + 1
+                };
+                if round == 1 {
+                    assert!(headers
+                        .to_ascii_lowercase()
+                        .contains(&format!("range: bytes={offset}-")));
+                }
+                let status = if round == 0 {
+                    "200 OK"
+                } else {
+                    "206 Partial Content"
+                };
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Range: bytes {offset}-{}/{}\r\nConnection: close\r\n\r\n", data.len() - offset, data.len() - 1, data.len()).unwrap();
+                if round == 0 {
+                    stream.write_all(&data[..PROGRESS_CHUNK as usize]).unwrap();
+                    pause_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    stream
+                        .write_all(&data[PROGRESS_CHUNK as usize..PROGRESS_CHUNK as usize + 1])
+                        .unwrap();
+                    assert_eq!(stream.read(&mut [0u8; 1]).unwrap(), 0);
+                    closed_tx.send(()).unwrap();
+                } else {
+                    stream.write_all(&data[offset..]).unwrap();
+                }
+            }
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let release = Release {
+            full: "158.0-beta.40".into(),
+            version: "158.0".into(),
+            build: "beta.40".into(),
+            asset_url: format!("http://{address}/browser.zip"),
+            size: 0,
+            prerelease: true,
+        };
+        let control = Arc::new(DownloadControl::default());
+        let worker_control = control.clone();
+        let worker_root = root.clone();
+        let worker_release = release.clone();
+        let (worker_tx, rx) = async_channel::unbounded();
+        let worker = std::thread::spawn(move || {
+            download_release(&worker_release, &worker_root, &worker_tx, &worker_control).unwrap();
+        });
+        loop {
+            if let DownloadMsg::Progress { downloaded, .. } = rx.recv_blocking().unwrap() {
+                if downloaded >= PROGRESS_CHUNK {
+                    break;
+                }
+            }
+        }
+        control.toggle_pause();
+        assert!(control.is_paused());
+        pause_tx.send(()).unwrap();
+        closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        control.toggle_pause();
+        worker.join().unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            std::fs::metadata(root.join(&release.full).join(exe_name()))
+                .unwrap()
+                .len(),
+            2 * PROGRESS_CHUNK
+        );
+        control.toggle_pause();
+        control.cancel();
+        assert!(control.checkpoint().is_err());
+        control.toggle_pause();
+        assert!(control.is_cancelled());
+        let cancelled = Release {
+            full: "158.0-beta.41".into(),
+            ..release
+        };
+        let (tx, _rx) = async_channel::unbounded();
+        assert!(download_release(&cancelled, &root, &tx, &control).is_err());
+        assert!(!root
+            .join(format!(".part-{}-{}", cancelled.full, std::process::id()))
+            .exists());
+        assert!(!root.join(&cancelled.full).exists());
+    }
+
+    #[test]
+    fn browser_removal_is_limited_to_installed_child_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let version = tmp.path().join("158.0-beta.40");
+        std::fs::create_dir(&version).unwrap();
+        std::fs::write(version.join(exe_name()), b"browser").unwrap();
+        assert_eq!(
+            installed_version_dir(tmp.path(), "158.0-beta.40").unwrap(),
+            version
+        );
+        assert!(installed_version_dir(tmp.path(), "..").is_err());
+        assert!(installed_version_dir(tmp.path(), "../profiles").is_err());
+        assert!(installed_version_dir(tmp.path(), "missing-version").is_err());
+        assert!(version.join(exe_name()).is_file());
+    }
 
     #[test]
     fn parse_asset_matches_official_pattern() {
@@ -461,14 +736,14 @@ mod tests {
         let dest = tmp.path().join("out-flat");
         std::fs::create_dir_all(&dest).unwrap();
         make_zip(&zip_path, "");
-        extract_zip(&zip_path, &dest).unwrap();
+        extract_zip(&zip_path, &dest, &DownloadControl::default()).unwrap();
         assert!(dest.join("camoufox.exe").exists());
         assert!(dest.join("fonts").join("a.ttf").exists());
 
         let dest2 = tmp.path().join("out-nested");
         std::fs::create_dir_all(&dest2).unwrap();
         make_zip(&zip_path, "camoufox/");
-        extract_zip(&zip_path, &dest2).unwrap();
+        extract_zip(&zip_path, &dest2, &DownloadControl::default()).unwrap();
         assert!(dest2.join("camoufox.exe").exists());
         assert!(!dest2.join("camoufox").exists());
     }

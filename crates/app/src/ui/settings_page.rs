@@ -130,6 +130,36 @@ impl AppState {
             )
         };
 
+        let downloads = browser_pick::render_download_cards(self, cx);
+        let installed_rows: Vec<AnyElement> = self.browsers.installed_versions.iter().map(|full| {
+            let reason = self.browser_delete_block_reason(full);
+            let deleting = self.browsers.deleting_version.as_deref() == Some(full.as_str());
+            let version = full.clone();
+            h_flex().w_full().gap_3().justify_between()
+                .child(div().flex_1().min_w_0().child(div().text_sm().child(full.clone()))
+                    .child(div().text_xs().text_color(muted).child(reason.unwrap_or("未被配置引用，可以删除"))))
+                .child(Button::new(SharedString::from(format!("delete-browser-{full}")))
+                    .small().danger().disabled(reason.is_some())
+                    .label(if deleting { "删除中…" } else { "删除" })
+                    .on_click(cx.listener(move |_state, _, window, cx| {
+                        let view = cx.entity();
+                        let version = version.clone();
+                        window.open_alert_dialog(cx, move |alert, _, _| {
+                            let view = view.clone();
+                            let deleting = version.clone();
+                            alert.confirm().title("删除浏览器版本")
+                                .description(format!("确定永久删除 camoufox {version} 吗？仅删除浏览器程序，不会删除身份、Cookie 或登录数据；再次使用需要重新下载。"))
+                                .button_props(DialogButtonProps::default().ok_text("删除")
+                                    .ok_variant(ButtonVariant::Danger).show_cancel(true)
+                                    .on_ok(move |_, _, cx| {
+                                        view.update(cx, |state, cx| state.delete_browser_version(&deleting, cx));
+                                        true
+                                    }))
+                        });
+                    })))
+                .into_any_element()
+        }).collect();
+
         let options: &[(CloseAction, &str, &str)] = &[
             (
                 CloseAction::Confirm,
@@ -147,6 +177,7 @@ impl AppState {
         div()
             .id("settings-page")
             .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
@@ -174,20 +205,21 @@ impl AppState {
                             .text_sm()
                             .font_semibold()
                             .text_color(fg)
-                            .child("camoufox 浏览器下载"),
+                            .child("camoufox 浏览器管理"),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(muted)
                             .child(
-                                "从 GitHub 官方 releases（daijro/camoufox）下载到上方目录的版本子文件夹；列表每次启动时自动更新。",
+                                "从 GitHub 官方 releases（daijro/camoufox）下载版本，并管理本机已安装的浏览器。身份和登录数据独立保存。",
                             ),
                     )
                     .child(
                         div()
                             .flex()
                             .items_center()
+                            .w_full()
                             .gap_2()
                             .child(
                                 div()
@@ -205,7 +237,9 @@ impl AppState {
                                     .small()
                                     .disabled(
                                         self.browsers.settings_release_pick.is_none()
-                                            || !self.browsers.downloads.is_empty(),
+                                            || !self.browsers.downloads.is_empty()
+                                            || self.browsers.deleting_version.is_some()
+                                            || self.browsers.settings_release_pick.as_ref().is_some_and(|full| self.browsers.installed_versions.contains(full)),
                                     )
                                     .label(if self.browsers.downloads.is_empty() {
                                         "下载"
@@ -238,7 +272,13 @@ impl AppState {
                             .text_xs()
                             .text_color(if release_status.1 { crate::ui::theme::RED } else { muted })
                             .child(release_status.0),
-                    ),
+                    )
+                    .children(downloads)
+                    .child(div().text_sm().font_semibold().text_color(fg).child("已安装的浏览器"))
+                    .when(installed_rows.is_empty(), |card| {
+                        card.child(div().text_xs().text_color(muted).child("暂无已安装版本"))
+                    })
+                    .children(installed_rows),
             )
             .child(self.render_python_env_card(cx))
             .child(

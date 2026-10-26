@@ -1,13 +1,13 @@
 //! UI 根状态：Profile 列表、编辑输入框缓存、运行实例、supervisor 桥接。
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camoforge_protocol::{Profile, WebglCard};
 use gpui::{AppContext as _, Context, Entity, FocusHandle, Task, Window};
 
-use crate::browser::{self, DownloadMsg, DownloadPhase, DownloadState, Release};
+use crate::browser::{self, DownloadControl, DownloadMsg, DownloadPhase, DownloadState, Release};
 use crate::logging::LogSink;
 use crate::python_env;
 use crate::settings::{AppSettings, CloseAction};
@@ -173,6 +173,7 @@ pub(crate) struct BrowserCatalog {
     pub download_tx: async_channel::Sender<DownloadMsg>,
     pub version_revision: u64,
     pub settings_release_pick: Option<String>,
+    pub deleting_version: Option<String>,
 }
 
 impl BrowserCatalog {
@@ -195,6 +196,7 @@ impl BrowserCatalog {
             download_tx,
             version_revision: 0,
             settings_release_pick: None,
+            deleting_version: None,
         }
     }
 }
@@ -833,8 +835,8 @@ impl AppState {
             cx.notify();
             return;
         }
-        if !self.browsers.downloads.is_empty() {
-            self.log("warn", "已有下载任务进行中，请等待完成后再试");
+        if !self.browsers.downloads.is_empty() || self.browsers.deleting_version.is_some() {
+            self.log("warn", "已有浏览器管理任务进行中，请等待完成后再试");
             cx.notify();
             return;
         }
@@ -853,13 +855,14 @@ impl AppState {
             return;
         };
         let tx = self.browsers.download_tx.clone();
+        let control = Arc::new(DownloadControl::default());
         self.browsers.downloads.insert(
             full.to_string(),
             DownloadState {
-                full: full.to_string(),
                 downloaded: 0,
                 total: rel.size,
                 phase: DownloadPhase::Downloading,
+                control: control.clone(),
             },
         );
         self.browsers.version_revision += 1;
@@ -871,19 +874,85 @@ impl AppState {
             ),
         );
         let root = self.browsers.releases_root.clone();
-        std::thread::spawn(move || match browser::download_release(&rel, &root, &tx) {
-            Ok(()) => {
-                let _ = tx.send_blocking(DownloadMsg::Done {
-                    full: rel.full.clone(),
-                });
-            }
-            Err(e) => {
-                let _ = tx.send_blocking(DownloadMsg::Failed {
-                    full: rel.full.clone(),
-                    error: format!("{e:#}"),
-                });
-            }
+        std::thread::spawn(move || {
+            let message = match browser::download_release(&rel, &root, &tx, &control) {
+                Ok(()) => DownloadMsg::Done { full: rel.full },
+                Err(_) if control.is_cancelled() => DownloadMsg::Cancelled { full: rel.full },
+                Err(error) => DownloadMsg::Failed {
+                    full: rel.full,
+                    error: format!("{error:#}"),
+                },
+            };
+            let _ = tx.send_blocking(message);
         });
+        cx.notify();
+    }
+
+    pub fn browser_delete_block_reason(&self, full: &str) -> Option<&'static str> {
+        if self.browsers.deleting_version.is_some() || !self.browsers.downloads.is_empty() {
+            return Some("请先完成或取消当前浏览器管理任务");
+        }
+        if self.worker.launching || !self.worker.running.is_empty() {
+            return Some("请先停止浏览器实例");
+        }
+        let directory = self.browsers.releases_root.join(full);
+        let canonical_directory = directory.canonicalize().ok();
+        let in_use = self
+            .settings
+            .camoufox_dir
+            .as_deref()
+            .into_iter()
+            .chain(
+                self.profile
+                    .profiles
+                    .iter()
+                    .filter_map(|profile| profile.launch.executable_path.as_deref()),
+            )
+            .any(|path| {
+                let path = Path::new(path);
+                path.starts_with(&directory)
+                    || canonical_directory.as_ref().is_some_and(|directory| {
+                        path.canonicalize()
+                            .is_ok_and(|path| path.starts_with(directory))
+                    })
+            });
+        if in_use {
+            return Some("配置使用中，请先切换到其他版本");
+        }
+        None
+    }
+
+    pub fn delete_browser_version(&mut self, full: &str, cx: &mut Context<Self>) {
+        if let Some(reason) = self.browser_delete_block_reason(full) {
+            self.pending_notifications.push((true, reason.to_string()));
+            cx.notify();
+            return;
+        }
+        let full = full.to_string();
+        let root = self.browsers.releases_root.clone();
+        self.browsers.deleting_version = Some(full.clone());
+        cx.spawn(async move |weak, cx| {
+            let version = full.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { browser::remove_installed(&root, &version) })
+                .await;
+            weak.update(cx, |state, cx| {
+                state.browsers.deleting_version = None;
+                state.browsers.installed_versions =
+                    browser::scan_installed(&state.browsers.releases_root);
+                state.browsers.version_revision += 1;
+                let (is_error, message) = match result {
+                    Ok(()) => (false, format!("camoufox {full} 已删除")),
+                    Err(error) => (true, format!("camoufox {full} 删除失败：{error:#}")),
+                };
+                state.log(if is_error { "error" } else { "info" }, message.clone());
+                state.pending_notifications.push((is_error, message));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -919,6 +988,11 @@ impl AppState {
                 self.pending_notifications
                     .push((true, format!("camoufox {full} 下载失败：{error}")));
                 self.log("error", format!("camoufox {full} 下载失败: {error}"));
+            }
+            DownloadMsg::Cancelled { full } => {
+                self.browsers.downloads.remove(&full);
+                self.browsers.version_revision += 1;
+                self.log("info", format!("camoufox {full} 下载已取消"));
             }
         }
         cx.notify();
@@ -1097,6 +1171,10 @@ impl AppState {
     }
 
     pub fn launch_current(&mut self, cx: &mut Context<Self>) {
+        if self.browsers.deleting_version.is_some() {
+            self.log("warn", "正在删除浏览器版本，请稍后再启动");
+            return;
+        }
         self.flush_pending_profile_save();
         let Some(mut p) = self.current().cloned() else {
             return;
