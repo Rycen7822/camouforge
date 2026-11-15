@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import shutil
+import struct
 import sys
 import tempfile
 import zipfile
@@ -161,6 +163,32 @@ _CHROME_CSS_PATCHES = (
 )
 
 
+def _open_omni_archive(path: Path) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(path)
+    except zipfile.BadZipFile:
+        data = path.read_bytes()
+        end = data.rfind(b"PK\x05\x06")
+        if data[4:8] != b"PK\x01\x02" or end < 0 or len(data) - end < 22:
+            raise
+        directory_size, directory_start, comment_size = struct.unpack_from("<IIH", data, end + 12)
+        directory_end = 4 + directory_size
+        footer = bytearray(data[end:])
+        if (
+            directory_start != 4
+            or len(footer) != 22 + comment_size
+            or data[directory_end:directory_end + len(footer)] != footer
+        ):
+            raise
+        # Gecko 优化归档将目录放在开头；追加标准目录视图，保留原文件偏移。
+        view = io.BytesIO(data)
+        view.seek(0, os.SEEK_END)
+        struct.pack_into("<I", footer, 16, len(data))
+        view.write(data[4:directory_end])
+        view.write(footer)
+        return zipfile.ZipFile(view)
+
+
 def _ensure_native_focus_patch(executable_path: Optional[str]) -> None:
     if os.name != "nt" or not executable_path:
         return
@@ -173,7 +201,7 @@ def _ensure_native_focus_patch(executable_path: Optional[str]) -> None:
     patched = 'docShell.overrideHasFocus = Services.prefs.getBoolPref("focusmanager.testmode", true);'
     staging = None
     try:
-        with zipfile.ZipFile(archive) as source:
+        with _open_omni_archive(archive) as source:
             if module not in source.namelist():
                 print(f"[camoforge] 原生焦点修复跳过：未找到 {module}", file=sys.stderr)
                 return
@@ -195,8 +223,10 @@ def _ensure_native_focus_patch(executable_path: Optional[str]) -> None:
                     target.writestr(info, script if info.filename == module else source.read(info))
         staging.replace(archive)
         print(f"[camoforge] 已修复 Juggler 原生焦点处理：{archive}", file=sys.stderr)
+    except PermissionError as e:
+        raise RuntimeError("无法写入原生焦点修复，请关闭使用该版本的浏览器并确认目录可写") from e
     except Exception as e:
-        raise RuntimeError("无法应用原生焦点修复，请关闭使用该版本的浏览器后重试") from e
+        raise RuntimeError(f"无法应用原生焦点修复：{e}") from e
     finally:
         if staging is not None:
             staging.unlink(missing_ok=True)
@@ -294,8 +324,6 @@ def _svg_images_are_firefox_compatible(font: Any) -> bool:
 
 
 def _emoji_bitmaps(font: Any):
-    import struct
-
     if "sbix" in font:
         strike = max(font["sbix"].strikes.values(), key=lambda s: s.ppem)
         scale = font["head"].unitsPerEm / strike.ppem

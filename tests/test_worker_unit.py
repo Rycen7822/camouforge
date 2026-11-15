@@ -580,25 +580,58 @@ def test_chrome_css_patches_create_profile_stylesheet():
 def test_native_focus_patch_preserves_browser_archive():
     if os.name != "nt":
         return
+    import struct
     import zipfile
 
+    for optimized in (False, True):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "camoufox.exe"
+            archive = exe.parent / "omni.ja"
+            module = "modules/juggler/content/main.js"
+            # 预留前置目录空间，保持 Gecko 布局中各文件头的绝对偏移。
+            prefix = 4 + 22 + 2 * 46 + len(module) + len("unrelated.bin") if optimized else 0
+            with archive.open("wb") as file:
+                file.write(b"\0" * prefix)
+                with zipfile.ZipFile(file, "w") as source:
+                    source.writestr(module, "docShell.overrideHasFocus = true;\ndocShell.forceActiveState = true;")
+                    source.writestr("unrelated.bin", b"\x00\xff\x01")
+            if optimized:
+                data = archive.read_bytes()
+                record = list(struct.unpack("<4s4H2LH", data[-22:]))
+                directory_start = record[6]
+                record[6] = 4
+                footer = struct.pack("<4s4H2LH", *record)
+                archive.write_bytes(
+                    struct.pack("<I", prefix) + data[directory_start:-22]
+                    + footer + data[prefix:directory_start] + footer
+                )
+            original = archive.read_bytes()
+            browser_patches._ensure_native_focus_patch(str(exe))
+            with zipfile.ZipFile(archive) as result:
+                assert result.read("unrelated.bin") == b"\x00\xff\x01"
+                assert b"focusmanager.testmode" in result.read(module)
+                assert b"docShell.forceActiveState = true;" in result.read(module)
+            assert (exe.parent / "omni.ja.camouforge-original").read_bytes() == original
+            patched = archive.read_bytes()
+            browser_patches._ensure_native_focus_patch(str(exe))
+            assert archive.read_bytes() == patched
+
+
+def test_native_focus_patch_reports_invalid_archive():
+    if os.name != "nt":
+        return
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / "camoufox.exe"
         archive = exe.parent / "omni.ja"
-        module = "modules/juggler/content/main.js"
-        with zipfile.ZipFile(archive, "w") as source:
-            source.writestr(module, "docShell.overrideHasFocus = true;\ndocShell.forceActiveState = true;")
-            source.writestr("unrelated.bin", b"\x00\xff\x01")
-        original = archive.read_bytes()
-        browser_patches._ensure_native_focus_patch(str(exe))
-        with zipfile.ZipFile(archive) as result:
-            assert result.read("unrelated.bin") == b"\x00\xff\x01"
-            assert b"focusmanager.testmode" in result.read(module)
-            assert b"docShell.forceActiveState = true;" in result.read(module)
-        assert (exe.parent / "omni.ja.camouforge-original").read_bytes() == original
-        patched = archive.read_bytes()
-        browser_patches._ensure_native_focus_patch(str(exe))
-        assert archive.read_bytes() == patched
+        archive.write_bytes(b"invalid zip")
+        try:
+            browser_patches._ensure_native_focus_patch(str(exe))
+        except RuntimeError as error:
+            assert "File is not a zip file" in str(error)
+            assert "关闭" not in str(error)
+        else:
+            raise AssertionError("invalid archive should reject the patch")
+        assert archive.read_bytes() == b"invalid zip"
 
 
 def test_shortcuts_page_uses_chrome_dark_background():
