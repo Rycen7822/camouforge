@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "camoforge"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "camoforge-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
