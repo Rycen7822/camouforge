@@ -108,6 +108,26 @@ def test_window_restores_native_size_and_keeps_explicit_override():
         assert w.translate_profile(profile, root)["window"] == (1280, 720)
 
 
+def test_restored_size_keeps_fingerprint_position_and_screen():
+    import dataclasses
+    from camoufox.fingerprints import from_browserforge
+    from sdk_bridge import _apply_window_to_fingerprint, _rebuild_fingerprint
+
+    data = w.generate_fingerprint({"os": "macos"})["fingerprint"]
+    data["screen"].update(width=960, height=540, devicePixelRatio=2, screenX=0)
+    fp = _rebuild_fingerprint(data)
+    before = dataclasses.asdict(fp)
+    before["screen"].setdefault("screenY", None)
+    _apply_window_to_fingerprint(fp, (1212, 1016))
+    after = dataclasses.asdict(fp)
+    config = from_browserforge(fp)
+    assert (config["window.screenX"], config["window.screenY"]) == (0, 0)
+    assert (fp.screen.outerWidth, fp.screen.outerHeight) == (1212, 1016)
+    for key in ("outerWidth", "outerHeight", "innerWidth", "innerHeight"):
+        before["screen"][key] = after["screen"][key]
+    assert after == before
+
+
 def test_proxy_and_port():
     prof = make_profile(launch={"proxy": {"server": "http://127.0.0.1:8080", "port": 1080}})
     kw = w.translate_profile(prof, Path("/tmp"))
@@ -577,7 +597,7 @@ def test_chrome_css_patches_create_profile_stylesheet():
         assert css.read_text(encoding="utf-8") == patched + custom
 
 
-def test_native_focus_patch_preserves_browser_archive():
+def test_native_browser_patches_preserve_archives_and_cache():
     if os.name != "nt":
         return
     import struct
@@ -587,6 +607,12 @@ def test_native_focus_patch_preserves_browser_archive():
         with tempfile.TemporaryDirectory() as tmp:
             exe = Path(tmp) / "camoufox.exe"
             archive = exe.parent / "omni.ja"
+            browser_archive = exe.parent / "browser" / "omni.ja"
+            browser_archive.parent.mkdir()
+            window_module = "modules/CamoufoxWindow.sys.mjs"
+            with zipfile.ZipFile(browser_archive, "w") as source:
+                source.writestr(window_module, "function applyWindowSize(win) {\n  applyWindowPosition(win);\n  win.resizeBy(1, 2);\n}\n")
+                source.writestr("unrelated.bin", b"\x00\xff\x01")
             module = "modules/juggler/content/main.js"
             # 预留前置目录空间，保持 Gecko 布局中各文件头的绝对偏移。
             prefix = 4 + 22 + 2 * 46 + len(module) + len("unrelated.bin") if optimized else 0
@@ -606,15 +632,24 @@ def test_native_focus_patch_preserves_browser_archive():
                     + footer + data[prefix:directory_start] + footer
                 )
             original = archive.read_bytes()
-            browser_patches._ensure_native_focus_patch(str(exe))
+            browser_patches._ensure_native_browser_patches(str(exe))
             with zipfile.ZipFile(archive) as result:
                 assert result.read("unrelated.bin") == b"\x00\xff\x01"
                 assert b"focusmanager.testmode" in result.read(module)
                 assert b"docShell.forceActiveState = true;" in result.read(module)
+            with zipfile.ZipFile(browser_archive) as result:
+                script = result.read(window_module)
+                assert b"  applyWindowPosition(win);" not in script
+                assert b"  win.resizeBy(1, 2);" in script
+                assert result.read("unrelated.bin") == b"\x00\xff\x01"
             assert (exe.parent / "omni.ja.camouforge-original").read_bytes() == original
-            patched = archive.read_bytes()
-            browser_patches._ensure_native_focus_patch(str(exe))
-            assert archive.read_bytes() == patched
+            patched = archive.read_bytes(), browser_archive.read_bytes()
+            flag = browser_archive.parent / ".purgecaches"
+            assert flag.is_file()
+            flag.unlink()
+            browser_patches._ensure_native_browser_patches(str(exe))
+            assert (archive.read_bytes(), browser_archive.read_bytes()) == patched
+            assert not flag.exists()
 
 
 def test_native_focus_patch_reports_invalid_archive():
@@ -625,7 +660,7 @@ def test_native_focus_patch_reports_invalid_archive():
         archive = exe.parent / "omni.ja"
         archive.write_bytes(b"invalid zip")
         try:
-            browser_patches._ensure_native_focus_patch(str(exe))
+            browser_patches._ensure_native_browser_patches(str(exe))
         except RuntimeError as error:
             assert "File is not a zip file" in str(error)
             assert "关闭" not in str(error)

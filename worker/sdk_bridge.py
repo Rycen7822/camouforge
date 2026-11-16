@@ -67,14 +67,13 @@ def _rebuild_fingerprint(d: Dict[str, Any]) -> Any:
 
 
 def _apply_window_to_fingerprint(fp: Any, size: tuple) -> None:
-    """把目标外窗尺寸写进指纹 screen（居中），让真实窗口与上报值一致。
-
-    SDK 在传入 fingerprint 时忽略 window 参数，窗口尺寸由指纹 screen 决定；
-    用 camoufox 自带的 handle_window_size 保证 inner/outer/screen 几何自洽。
-    """
+    """SDK 忽略 fingerprint 模式的 window 参数，需同步尺寸并保留原有位置。"""
     try:
         from camoufox.fingerprints import handle_window_size
+        position = fp.screen.screenX, getattr(fp.screen, "screenY", None)
         handle_window_size(fp, int(size[0]), int(size[1]))
+        # SDK 会顺带居中；指纹屏幕小于窗口时会产生负坐标并驱动真实窗口越界。
+        fp.screen.screenX, fp.screen.screenY = position
     except Exception:
         pass
 
